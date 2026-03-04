@@ -1,8 +1,9 @@
 # Compiled object files
 *.o
 
-# Executable
+# Executables
 parser
+analyzer
 
 # Generated output
 output.txt
