@@ -22,7 +22,7 @@ all: $(TARGET)
 # Компоновка
 $(TARGET): $(OBJS)
 	$(CXX) $(CXXFLAGS) -o $@ $^
-	@echo "Сборка завершена: ./$(TARGET)"
+	@echo "Build OK: ./$(TARGET)"
 
 # Компиляция каждого .cpp
 %.o: %.cpp
@@ -67,4 +67,4 @@ check: $(TARGET)
 .PHONY: clean
 clean:
 	rm -f $(OBJS) $(TARGET)
-	@echo "Очистка завершена"
+	@echo "Clean done"

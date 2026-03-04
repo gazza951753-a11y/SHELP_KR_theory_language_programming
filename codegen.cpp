@@ -170,7 +170,7 @@ std::string CodeGen::genRaw(const ASTNode* node) {
     else if (auto* n = dynamic_cast<const NumberNode*>(node)) {
         return n->raw;
     }
-    throw std::runtime_error("genRaw: неизвестный тип узла АСД");
+    throw std::runtime_error("genRaw: unknown AST node type");
 }
 
 // =============================================================================
@@ -214,7 +214,7 @@ std::string CodeGen::genOptExpr(const ASTNode* node) {
     else if (auto* n = dynamic_cast<const NumberNode*>(node)) {
         return n->raw;
     }
-    throw std::runtime_error("genOptExpr: неизвестный тип узла АСД");
+    throw std::runtime_error("genOptExpr: unknown AST node type");
 }
 
 /// Верхний уровень: обработка AssignNode.
@@ -269,7 +269,7 @@ bool CodeGen::isConstant(const std::string& name) const {
 double CodeGen::getConstValue(const std::string& name) const {
     auto it = symIndex_.find(name);
     if (it == symIndex_.end())
-        throw std::runtime_error("getConstValue: символ не найден: " + name);
+        throw std::runtime_error("getConstValue: symbol not found: " + name);
     return symbols_[it->second].value;
 }
 

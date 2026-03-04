@@ -1,19 +1,14 @@
 /**
- * main.cpp — точка входа парсера арифметических выражений (ДМПА / DPDA).
+ * main.cpp -- entry point for the arithmetic expression parser (DPDA).
  *
- * Входные данные: файл "input.txt"
- *   Одна строка вида:  ПЕРЕМЕННАЯ = ВЫРАЖЕНИЕ
- *   где ВЫРАЖЕНИЕ содержит +, *, (, ), числа (целые, вещественные, в научной
- *   нотации) и имена переменных.
+ * Input:  "input.txt"  -- one line:  VARIABLE = EXPRESSION
+ * Output: "output.txt" -- four sections:
+ *   1. Parse tree (AST dump, indented)
+ *   2. Symbol table (names, kinds, values, positions)
+ *   3. Non-optimized intermediate code (3-address code)
+ *   4. Optimized code (constant folding + copy elimination)
  *
- * Выходные данные: файл "output.txt" с четырьмя разделами:
- *   1. Дерево разбора (АСД) — текстовое с отступами
- *   2. Таблица символов — имена, типы, значения, позиции
- *   3. Неоптимизированный промежуточный код (трёхадресный, 3AC)
- *   4. Оптимизированный код (свёртка констант + устранение лишнего копирования)
- *
- * При лексической или синтаксической ошибке — сообщение выводится в output.txt
- * и на stderr.
+ * On lexical or syntax error the message is written to output.txt and stderr.
  */
 
 #include "ast.h"
@@ -26,58 +21,50 @@
 #include <sstream>
 #include <string>
 
-// =============================================================================
-// Вспомогательные функции форматирования вывода
-// =============================================================================
-
-/// Вывести декоративный заголовок раздела
+// Print a numbered section header
 static void printSection(std::ostream& os, int num, const std::string& title) {
     const std::string line(72, '=');
     os << "\n" << line << "\n";
-    os << "  РАЗДЕЛ " << num << ": " << title << "\n";
+    os << "  SECTION " << num << ": " << title << "\n";
     os << line << "\n\n";
 }
 
-// =============================================================================
-// main()
-// =============================================================================
 int main() {
     // -------------------------------------------------------------------------
-    // 1. Чтение input.txt
+    // 1. Read input.txt
     // -------------------------------------------------------------------------
     std::ifstream inFile("input.txt");
     if (!inFile.is_open()) {
-        std::cerr << "Ошибка: не удалось открыть файл input.txt\n";
+        std::cerr << "Error: cannot open input.txt\n";
         return 1;
     }
 
     std::string inputLine;
     if (!std::getline(inFile, inputLine)) {
-        std::cerr << "Ошибка: файл input.txt пуст\n";
+        std::cerr << "Error: input.txt is empty\n";
         return 1;
     }
     inFile.close();
 
     // -------------------------------------------------------------------------
-    // 2. Открытие output.txt
+    // 2. Open output.txt
     // -------------------------------------------------------------------------
     std::ofstream outFile("output.txt");
     if (!outFile.is_open()) {
-        std::cerr << "Ошибка: не удалось открыть файл output.txt для записи\n";
+        std::cerr << "Error: cannot open output.txt for writing\n";
         return 1;
     }
 
-    // Шапка файла
     outFile << "========================================================================\n";
-    outFile << "  Парсер арифметических выражений на основе ДМПА (Recursive Descent)\n";
-    outFile << "  Теория языков программирования и методы трансляции\n";
+    outFile << "  Arithmetic Expression Parser  --  Recursive Descent (DPDA)\n";
+    outFile << "  Theory of Programming Languages and Translation Methods\n";
     outFile << "========================================================================\n";
     outFile << "\n";
-    outFile << "Входная строка:\n";
+    outFile << "Input:\n";
     outFile << "  " << inputLine << "\n";
 
     // -------------------------------------------------------------------------
-    // 3. Лексический и синтаксический анализ
+    // 3. Lex + parse
     // -------------------------------------------------------------------------
     ASTNodePtr ast;
     try {
@@ -86,84 +73,82 @@ int main() {
         ast = parser.parse();
     }
     catch (const LexerError& e) {
-        // e.what() уже содержит строку и столбец
-        std::string msg = std::string("ЛЕКСИЧЕСКАЯ ОШИБКА: ") + e.what();
+        std::string msg = std::string("LEXER ERROR: ") + e.what();
         outFile << "\n" << msg << "\n";
         std::cerr << msg << "\n";
         return 1;
     }
     catch (const ParseError& e) {
-        // e.what() уже содержит строку и столбец
-        std::string msg = std::string("СИНТАКСИЧЕСКАЯ ОШИБКА: ") + e.what();
+        std::string msg = std::string("SYNTAX ERROR: ") + e.what();
         outFile << "\n" << msg << "\n";
         std::cerr << msg << "\n";
         return 1;
     }
 
     // -------------------------------------------------------------------------
-    // 4. Генерация кода и оптимизация
+    // 4. Code generation and optimization
     // -------------------------------------------------------------------------
     CodeGen cg;
     cg.generate(ast.get());
 
     // =========================================================================
-    // РАЗДЕЛ 1: ДЕРЕВО РАЗБОРА
+    // SECTION 1: PARSE TREE
     // =========================================================================
-    printSection(outFile, 1, "ДЕРЕВО РАЗБОРА (АСД / AST)");
-    outFile << "Обозначения:\n";
-    outFile << "  AssignNode [x =]       — присваивание переменной x\n";
-    outFile << "  BinaryOpNode ['+'/`*`] — бинарная операция\n";
-    outFile << "  IdentNode  [name]      — идентификатор (переменная)\n";
-    outFile << "  NumberNode [value]     — числовая константа\n";
-    outFile << "  Отступ 2 пробела на каждый уровень вложенности.\n\n";
+    printSection(outFile, 1, "PARSE TREE (AST)");
+    outFile << "Node types:\n";
+    outFile << "  AssignNode [x =]      -- assignment to variable x\n";
+    outFile << "  BinaryOpNode ['+','*']-- binary arithmetic operation\n";
+    outFile << "  IdentNode  [name]     -- identifier (variable reference)\n";
+    outFile << "  NumberNode [value]    -- numeric literal\n";
+    outFile << "  Each indentation level = 2 spaces.\n\n";
     ast->print(outFile, 0);
 
     // =========================================================================
-    // РАЗДЕЛ 2: ТАБЛИЦА СИМВОЛОВ
+    // SECTION 2: SYMBOL TABLE
     // =========================================================================
-    printSection(outFile, 2, "ТАБЛИЦА СИМВОЛОВ (Table of Names)");
-    outFile << "Тип/Kind:\n";
-    outFile << "  variable — идентификатор (переменная)\n";
-    outFile << "  integer  — целочисленная константа\n";
-    outFile << "  float    — вещественная или экспоненциальная константа\n\n";
+    printSection(outFile, 2, "SYMBOL TABLE (Table of Names)");
+    outFile << "Kind:\n";
+    outFile << "  variable -- identifier (variable name)\n";
+    outFile << "  integer  -- integer numeric constant\n";
+    outFile << "  float    -- floating-point or scientific-notation constant\n\n";
     cg.printSymbolTable(outFile);
 
     // =========================================================================
-    // РАЗДЕЛ 3: НЕОПТИМИЗИРОВАННЫЙ ПРОМЕЖУТОЧНЫЙ КОД
+    // SECTION 3: NON-OPTIMIZED INTERMEDIATE CODE (3AC)
     // =========================================================================
-    printSection(outFile, 3, "НЕОПТИМИЗИРОВАННЫЙ ПРОМЕЖУТОЧНЫЙ КОД (3-Address Code)");
-    outFile << "Каждая бинарная операция порождает новую временную переменную ti.\n";
-    outFile << "Результат присваивания — явная инструкция копирования.\n\n";
+    printSection(outFile, 3, "NON-OPTIMIZED INTERMEDIATE CODE (3-Address Code)");
+    outFile << "Each binary operation produces a new temporary variable ti.\n";
+    outFile << "The assignment ends with an explicit copy instruction.\n\n";
     cg.printRawCode(outFile);
 
     // =========================================================================
-    // РАЗДЕЛ 4: ОПТИМИЗИРОВАННЫЙ КОД
+    // SECTION 4: OPTIMIZED CODE
     // =========================================================================
-    printSection(outFile, 4, "ОПТИМИЗИРОВАННЫЙ КОД (Constant Folding)");
-    outFile << "Применённые оптимизации:\n";
-    outFile << "  1. Свёртка констант: подвыражение с двумя константами\n";
-    outFile << "     вычисляется в compile-time (напр. 2 + 5 => 7).\n";
-    outFile << "  2. Устранение лишнего копирования: последняя временная\n";
-    outFile << "     переменная переименовывается в целевую (result = t_N => убирается).\n";
+    printSection(outFile, 4, "OPTIMIZED CODE (Constant Folding)");
+    outFile << "Optimizations applied:\n";
+    outFile << "  1. Constant folding: a sub-expression with two constant operands\n";
+    outFile << "     is evaluated at compile time (e.g. 2 + 5 => 7).\n";
+    outFile << "  2. Copy elimination: the last temporary is renamed to the target\n";
+    outFile << "     variable, removing the redundant 'result = t_N' copy.\n";
     if (cg.wasFoldingApplied()) {
-        outFile << "\n  [+] Свёртка констант применена!\n\n";
+        outFile << "\n  [+] Constant folding was applied!\n\n";
     } else {
-        outFile << "\n  [-] Свёртка констант не применялась\n";
-        outFile << "      (в выражении нет подвыражений, состоящих только из констант).\n\n";
+        outFile << "\n  [-] No constant folding applied\n";
+        outFile << "      (no sub-expression consists entirely of constants).\n\n";
     }
     cg.printOptCode(outFile);
 
     // =========================================================================
-    // Завершение
+    // Done
     // =========================================================================
     outFile << "\n";
     const std::string footer(72, '-');
     outFile << footer << "\n";
-    outFile << "  Разбор успешно завершён.\n";
+    outFile << "  Parsing completed successfully.\n";
     outFile << footer << "\n";
 
     outFile.close();
 
-    std::cout << "Готово! Результат записан в output.txt\n";
+    std::cout << "Done! Result written to output.txt\n";
     return 0;
 }
