@@ -1,0 +1,18 @@
+# LL(1) Grammar for C++ struct/record declarations
+#
+# Terminals (special):
+#   <identifier>  — any valid C identifier  (matched by lexer)
+#   <integer>     — any non-negative integer (matched by lexer)
+#
+# Terminals (keywords):  struct, int, double, float, char, bool, string
+# Terminals (punctuation): { } ; [ ]
+#
+# The first rule's left-hand side is the START symbol.
+
+PROGRAM -> STRUCTLIST
+STRUCTLIST -> STRUCTDECL STRUCTLIST | eps
+STRUCTDECL -> struct <identifier> { FIELDLIST } ;
+FIELDLIST -> FIELDDECL FIELDLIST | eps
+FIELDDECL -> TYPE <identifier> FIELDSUFFIX ;
+FIELDSUFFIX -> [ <integer> ] | eps
+TYPE -> int | double | float | char | bool | string | <identifier>

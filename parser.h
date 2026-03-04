@@ -1,97 +1,87 @@
 /*
- * parser.h — рекурсивный нисходящий парсер.
+ * parser.h — LL(1) table-driven parser for struct declarations.
  *
- * Парсер — это часть программы, которая берёт токены от лексера
- * и строит из них дерево (AST). Мы используем метод рекурсивного
- * спуска: для каждого правила грамматики пишем отдельную функцию.
+ * The parser uses the parse table built by the Grammar module and processes
+ * the token stream produced by the Lexer.
  *
- * Грамматика (в виде правил вывода):
- *   ASSIGN  -> ID '=' EXPR
- *   EXPR    -> TERM EXPR'
- *   EXPR'   -> '+' TERM EXPR'  |  ε
- *   TERM    -> FACTOR TERM'
- *   TERM'   -> '*' FACTOR TERM'  |  ε
- *   FACTOR  -> '(' EXPR ')' | NUMBER | ID
+ * Algorithm overview (table-driven LL(1))
+ * ----------------------------------------
+ * We maintain an explicit stack of grammar symbols.
+ * Initially:  stack = [ "$",  startSymbol ]  ($ on the bottom)
  *
- * Связь с ДМПА (детерминированным магазинным автоматом):
- *   Стек вызовов рекурсивных функций — это и есть стек автомата.
- *   Каждый метод parseXxx() — одно «состояние» автомата.
- *   Смотрим на очередной токен (lookahead = 1) и решаем, куда идти дальше.
- *   Это и называется LL(1)-разбор — слева направо, 1 токен вперёд.
+ * At each step we look at:
+ *   • top  = top of the parse stack
+ *   • tok  = current lookahead token
  *
- * Почему правила с прайм (EXPR', TERM')?
- *   Потому что исходная грамматика содержала левую рекурсию:
- *     EXPR -> EXPR '+' TERM
- *   Рекурсивный спуск с ней зависнет. Мы от неё избавились,
- *   переписав правила в «хвостовую» форму с EXPR' и TERM'.
+ * Case 1 — top is a TERMINAL:
+ *   If top == tok.grammarSymbol()  →  match: pop top, advance input.
+ *   Else  →  syntax error.
+ *
+ * Case 2 — top is a NONTERMINAL:
+ *   Look up table[top][tok.grammarSymbol()]:
+ *     Found  →  pop top, push rhs symbols in REVERSE order (so the
+ *               leftmost symbol ends up on top of the stack).
+ *     Not found  →  syntax error.
+ *
+ * Case 3 — top == "$" and tok == "$":
+ *   Accept (successful parse).
+ *
+ * Case 4 — top == "$" but tok != "$":
+ *   The input has extra tokens after a complete parse → syntax error.
+ *
+ * Result
+ * ------
+ * ParseResult holds either a success flag or a (line, col) error location.
  */
 
 #pragma once
 
-#include "ast.h"
+#include "grammar.h"
 #include "lexer.h"
 
-#include <stdexcept>
+#include <string>
+#include <vector>
 
 // =============================================================================
-// Исключение синтаксической ошибки
-// Бросается когда токены не соответствуют грамматике
+// ParseResult — outcome of one parse attempt
 // =============================================================================
-class ParseError : public std::runtime_error {
-public:
-    int line;  // строка где ошибка
-    int col;   // столбец где ошибка
+struct ParseResult {
+    bool        ok;     // true = syntactically correct
+    int         line;   // error line   (meaningful only when ok == false)
+    int         col;    // error column (meaningful only when ok == false)
+    std::string msg;    // human-readable error description
 
-    ParseError(const std::string& msg, int line, int col)
-        : std::runtime_error(msg), line(line), col(col) {}
+    // Factory helpers
+    static ParseResult success() {
+        return {true, 0, 0, ""};
+    }
+    static ParseResult error(int l, int c, const std::string& m) {
+        return {false, l, c, m};
+    }
 };
 
 // =============================================================================
-// Класс парсера
+// Parser
 // =============================================================================
 class Parser {
 public:
-    // Конструктор принимает уже готовый лексер (он будет давать токены)
-    explicit Parser(Lexer& lexer);
+    /*
+     * Constructor.
+     * @param grammar  A fully loaded Grammar instance (must be LL(1)).
+     *                 The caller is responsible for checking isLL1() first.
+     */
+    explicit Parser(const Grammar& grammar);
 
-    // Главный метод: разобрать весь ввод и вернуть корень дерева (AssignNode).
-    // Если что-то не так — бросит ParseError.
-    ASTNodePtr parse();
+    /*
+     * parse(tokens)
+     * -------------
+     * Run the LL(1) table-driven algorithm on the given token sequence.
+     * @param tokens  Output of Lexer::tokenize(); must end with EOF_TOKEN.
+     * @return ParseResult::success() on a valid input,
+     *         ParseResult::error()   on the first syntax error.
+     */
+    ParseResult parse(const std::vector<Token>& tokens) const;
 
 private:
-    Lexer& lexer_;  // лексер, из которого берём токены
-
-    // -------------------------------------------------------------------------
-    // Методы для каждого правила грамматики
-    // Каждый метод разбирает «своё» правило и возвращает узел дерева
-    // -------------------------------------------------------------------------
-
-    // Разбирает:  ID '=' EXPR
-    ASTNodePtr parseAssign();
-
-    // Разбирает:  TERM EXPR'
-    ASTNodePtr parseExpr();
-
-    // Разбирает:  '+' TERM EXPR'  или  ε (т.е. ничего)
-    // left — это уже разобранная левая часть, передаём её сюда
-    ASTNodePtr parseExprPrime(ASTNodePtr left);
-
-    // Разбирает:  FACTOR TERM'
-    ASTNodePtr parseTerm();
-
-    // Разбирает:  '*' FACTOR TERM'  или  ε
-    // left — уже разобранная левая часть
-    ASTNodePtr parseTermPrime(ASTNodePtr left);
-
-    // Разбирает:  '(' EXPR ')'  |  NUMBER  |  ID
-    ASTNodePtr parseFactor();
-
-    // -------------------------------------------------------------------------
-    // Вспомогательный метод
-    // -------------------------------------------------------------------------
-
-    // Требует чтобы следующий токен был именно нужного типа.
-    // Если нет — бросает ParseError с объяснением что ожидалось, а что пришло.
-    // Если да — «съедает» токен и возвращает его.
-    Token expect(TokenType type);
+    const Grammar& grammar_;
 };

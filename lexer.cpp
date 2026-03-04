@@ -1,69 +1,99 @@
 /*
- * lexer.cpp — реализация лексического анализатора.
+ * lexer.cpp — Implementation of the struct-declaration tokenizer.
  *
- * Здесь написана логика «нарезки» строки на токены.
- * Принцип работы: идём по строке символ за символом,
- * смотрим что за символ и решаем — это начало числа, имени или оператора.
- *
- * Числа распознаём в трёх форматах:
- *   целые:      просто цифры             (42)
- *   дробные:    цифры, точка, цифры      (3.14)
- *   научная:    цифры [.цифры] e [+-] цифры  (1e+18, 8.41E-10)
- *
- * Имена:  буква, потом буквы или цифры  (result, a, x1)
- * Операторы: каждый один символ  (+  *  =  (  ))
+ * Key design points
+ * -----------------
+ *  • Line/column tracking: col_ is incremented for every normal character;
+ *    on '\n' we bump line_ and reset col_ to 1.
+ *  • Comments: C++ single-line comments (//) are skipped entirely.
+ *  • Keywords: identifiers that match a reserved word are reclassified.
+ *  • Error: any unrecognised character throws LexerError.
  */
 
 #include "lexer.h"
 
-#include <cctype>   // isdigit, isalpha, isspace — проверка типа символа
-#include <sstream>  // ostringstream — для формирования строк ошибок
+#include <cctype>
+#include <unordered_map>
 
-// Возвращает читаемое название типа токена.
-// Нужно только для красивых сообщений об ошибках.
-std::string tokenTypeName(TokenType t) {
-    switch (t) {
-        case TokenType::TK_ID:     return "IDENTIFIER";
-        case TokenType::TK_NUMBER: return "NUMBER";
-        case TokenType::TK_PLUS:   return "'+'";
-        case TokenType::TK_STAR:   return "'*'";
-        case TokenType::TK_ASSIGN: return "'='";
-        case TokenType::TK_LPAREN: return "'('";
-        case TokenType::TK_RPAREN: return "')'";
-        case TokenType::TK_EOF:    return "EOF";
-        default:                   return "UNKNOWN";
+// ---------------------------------------------------------------------------
+// Token helpers
+// ---------------------------------------------------------------------------
+
+std::string Token::grammarSymbol() const {
+    // Maps each token type to the terminal string used in grammar.txt and the
+    // LL(1) parse table.
+    switch (type) {
+        case TokenType::KW_STRUCT:    return "struct";
+        case TokenType::KW_INT:       return "int";
+        case TokenType::KW_DOUBLE:    return "double";
+        case TokenType::KW_FLOAT:     return "float";
+        case TokenType::KW_CHAR:      return "char";
+        case TokenType::KW_BOOL:      return "bool";
+        case TokenType::KW_STRING:    return "string";
+        case TokenType::IDENTIFIER:   return "<identifier>";
+        case TokenType::INTEGER:      return "<integer>";
+        case TokenType::LBRACE:       return "{";
+        case TokenType::RBRACE:       return "}";
+        case TokenType::SEMICOLON:    return ";";
+        case TokenType::LBRACKET:     return "[";
+        case TokenType::RBRACKET:     return "]";
+        case TokenType::EOF_TOKEN:    return "$";
     }
+    return "?";  // unreachable
 }
 
-// Конструктор: сохраняем строку, ставим позицию на начало
+std::string Token::typeName() const {
+    switch (type) {
+        case TokenType::KW_STRUCT:    return "keyword 'struct'";
+        case TokenType::KW_INT:       return "keyword 'int'";
+        case TokenType::KW_DOUBLE:    return "keyword 'double'";
+        case TokenType::KW_FLOAT:     return "keyword 'float'";
+        case TokenType::KW_CHAR:      return "keyword 'char'";
+        case TokenType::KW_BOOL:      return "keyword 'bool'";
+        case TokenType::KW_STRING:    return "keyword 'string'";
+        case TokenType::IDENTIFIER:   return "identifier";
+        case TokenType::INTEGER:      return "integer";
+        case TokenType::LBRACE:       return "'{'";
+        case TokenType::RBRACE:       return "'}'";
+        case TokenType::SEMICOLON:    return "';'";
+        case TokenType::LBRACKET:     return "'['";
+        case TokenType::RBRACKET:     return "']'";
+        case TokenType::EOF_TOKEN:    return "end-of-file";
+    }
+    return "unknown";
+}
+
+// ---------------------------------------------------------------------------
+// Lexer constructor
+// ---------------------------------------------------------------------------
+
 Lexer::Lexer(const std::string& source)
-    : src_(source)
-    , pos_(0)
-    , line_(1)
-    , col_(1)
-    , hasPeeked_(false)
-    , peeked_(TokenType::TK_EOF, "", 0, 0)  // пустышка, просто чтобы поле было инициализировано
+    : src_(source), pos_(0), line_(1), col_(1)
 {}
 
-// =============================================================================
-// Внутренние вспомогательные методы
-// =============================================================================
+// ---------------------------------------------------------------------------
+// Character helpers
+// ---------------------------------------------------------------------------
 
-// Вернуть символ на текущей позиции, не двигаясь вперёд.
-// Если дошли до конца — вернуть нулевой символ '\0'.
 bool Lexer::atEnd() const {
     return pos_ >= src_.size();
 }
 
-char Lexer::current() const {
-    return atEnd() ? '\0' : src_[pos_];
+char Lexer::cur() const {
+    if (atEnd()) return '\0';
+    return src_[pos_];
 }
 
-// Вернуть текущий символ и сдвинуться на следующий.
-// Если прошли перенос строки — увеличиваем счётчик строк, сбрасываем столбец.
+char Lexer::peek(size_t offset) const {
+    size_t idx = pos_ + offset;
+    if (idx >= src_.size()) return '\0';
+    return src_[idx];
+}
+
 char Lexer::advance() {
     char c = src_[pos_++];
     if (c == '\n') {
+        // New line: reset column counter
         ++line_;
         col_ = 1;
     } else {
@@ -72,131 +102,139 @@ char Lexer::advance() {
     return c;
 }
 
-// Пропустить все пробельные символы (пробел, \t, \r, \n).
-// Пробелы между токенами нас не интересуют.
+// ---------------------------------------------------------------------------
+// Whitespace / comment skipping
+// ---------------------------------------------------------------------------
+
 void Lexer::skipWhitespace() {
-    while (!atEnd() && std::isspace(static_cast<unsigned char>(current()))) {
-        advance();
+    while (!atEnd()) {
+        char c = cur();
+
+        if (std::isspace(static_cast<unsigned char>(c))) {
+            advance();
+        } else if (c == '/' && peek() == '/') {
+            // C++ single-line comment: skip until end of line
+            while (!atEnd() && cur() != '\n') {
+                advance();
+            }
+        } else {
+            break;
+        }
     }
 }
 
-// Прочитать числовой литерал.
-// К моменту вызова мы уже знаем что текущий символ — цифра.
-// Читаем: целую часть, потом (если есть) дробную, потом (если есть) экспоненту.
-Token Lexer::readNumber(int startLine, int startCol) {
-    std::string num;
+// ---------------------------------------------------------------------------
+// Reading composite tokens
+// ---------------------------------------------------------------------------
 
-    // Целая часть: читаем все цифры подряд
-    while (!atEnd() && std::isdigit(static_cast<unsigned char>(current()))) {
-        num += advance();
+/*
+ * readIdentifierOrKeyword
+ * -----------------------
+ * Precondition: cur() is a letter or underscore.
+ * Reads [A-Za-z_][A-Za-z0-9_]* then checks whether the result is a
+ * reserved keyword.  Returns an appropriately typed token.
+ */
+Token Lexer::readIdentifierOrKeyword() {
+    // Table of keywords recognised by this grammar
+    static const std::unordered_map<std::string, TokenType> keywords = {
+        {"struct", TokenType::KW_STRUCT},
+        {"int",    TokenType::KW_INT},
+        {"double", TokenType::KW_DOUBLE},
+        {"float",  TokenType::KW_FLOAT},
+        {"char",   TokenType::KW_CHAR},
+        {"bool",   TokenType::KW_BOOL},
+        {"string", TokenType::KW_STRING},
+    };
+
+    int startLine = line_;
+    int startCol  = col_;
+    std::string lexeme;
+
+    while (!atEnd() && (std::isalnum(static_cast<unsigned char>(cur())) || cur() == '_')) {
+        lexeme += advance();
     }
 
-    // Дробная часть: если следующий символ — точка, читаем её и цифры после
-    if (!atEnd() && current() == '.') {
-        num += advance();  // забираем '.'
-        while (!atEnd() && std::isdigit(static_cast<unsigned char>(current()))) {
-            num += advance();
+    // Check for keyword
+    auto it = keywords.find(lexeme);
+    TokenType type = (it != keywords.end()) ? it->second : TokenType::IDENTIFIER;
+
+    return Token(type, lexeme, startLine, startCol);
+}
+
+/*
+ * readInteger
+ * -----------
+ * Precondition: cur() is a digit.
+ * Reads one or more decimal digits.
+ */
+Token Lexer::readInteger() {
+    int startLine = line_;
+    int startCol  = col_;
+    std::string lexeme;
+
+    while (!atEnd() && std::isdigit(static_cast<unsigned char>(cur()))) {
+        lexeme += advance();
+    }
+
+    return Token(TokenType::INTEGER, lexeme, startLine, startCol);
+}
+
+// ---------------------------------------------------------------------------
+// Public interface: tokenize the entire source
+// ---------------------------------------------------------------------------
+
+/*
+ * tokenize()
+ * ----------
+ * Scans all characters, produces tokens in order.
+ * Always appends an EOF_TOKEN as the last element.
+ *
+ * Algorithm:
+ *   1. Skip whitespace / comments.
+ *   2. Dispatch on the first character.
+ *   3. Repeat until end of source.
+ *   4. Append EOF sentinel.
+ */
+std::vector<Token> Lexer::tokenize() {
+    std::vector<Token> tokens;
+
+    while (true) {
+        skipWhitespace();
+
+        if (atEnd()) break;
+
+        char c    = cur();
+        int  line = line_;
+        int  col  = col_;
+
+        // ---- Identifier / keyword ----
+        if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') {
+            tokens.push_back(readIdentifierOrKeyword());
+            continue;
+        }
+
+        // ---- Integer literal ----
+        if (std::isdigit(static_cast<unsigned char>(c))) {
+            tokens.push_back(readInteger());
+            continue;
+        }
+
+        // ---- Single-character punctuation ----
+        advance();   // consume the character
+        switch (c) {
+            case '{':  tokens.emplace_back(TokenType::LBRACE,    "{", line, col); break;
+            case '}':  tokens.emplace_back(TokenType::RBRACE,    "}", line, col); break;
+            case ';':  tokens.emplace_back(TokenType::SEMICOLON, ";", line, col); break;
+            case '[':  tokens.emplace_back(TokenType::LBRACKET,  "[", line, col); break;
+            case ']':  tokens.emplace_back(TokenType::RBRACKET,  "]", line, col); break;
+            default:
+                throw LexerError(
+                    std::string("Unexpected character '") + c + "'",
+                    line, col);
         }
     }
 
-    // Экспоненциальная часть: e или E, потом опциональный знак, потом цифры
-    // Пример: 1e+18  или  8.41E-10  или  5e3
-    if (!atEnd() && (current() == 'e' || current() == 'E')) {
-        num += advance();  // забираем 'e' или 'E'
-
-        // Опциональный знак экспоненты
-        if (!atEnd() && (current() == '+' || current() == '-')) {
-            num += advance();
-        }
-
-        // После e/E ОБЯЗАТЕЛЬНО должны быть цифры — иначе это ошибка
-        if (atEnd() || !std::isdigit(static_cast<unsigned char>(current()))) {
-            std::ostringstream oss;
-            oss << "Ожидаются цифры после показателя экспоненты в числе \""
-                << num << "\" (строка " << startLine << ", столбец " << startCol << ")";
-            throw LexerError(oss.str(), startLine, startCol);
-        }
-
-        // Читаем цифры степени
-        while (!atEnd() && std::isdigit(static_cast<unsigned char>(current()))) {
-            num += advance();
-        }
-    }
-
-    return Token(TokenType::TK_NUMBER, num, startLine, startCol);
-}
-
-// Прочитать идентификатор (имя переменной).
-// К моменту вызова текущий символ — буква.
-// Читаем буквы и цифры пока они идут подряд.
-Token Lexer::readIdent(int startLine, int startCol) {
-    std::string id;
-    while (!atEnd() && (std::isalpha(static_cast<unsigned char>(current()))
-                     || std::isdigit(static_cast<unsigned char>(current())))) {
-        id += advance();
-    }
-    return Token(TokenType::TK_ID, id, startLine, startCol);
-}
-
-// Прочитать очередной токен из строки.
-// Это основная функция лексера: пропускаем пробелы, смотрим на символ, решаем.
-Token Lexer::readToken() {
-    skipWhitespace();  // пробелы нам не нужны
-
-    // Дошли до конца — возвращаем EOF-токен
-    if (atEnd()) {
-        return Token(TokenType::TK_EOF, "", line_, col_);
-    }
-
-    int  startLine = line_;
-    int  startCol  = col_;
-    char c         = current();
-
-    // Одиночные символы-операторы: просто создаём токен нужного типа
-    if (c == '+') { advance(); return Token(TokenType::TK_PLUS,   "+", startLine, startCol); }
-    if (c == '*') { advance(); return Token(TokenType::TK_STAR,   "*", startLine, startCol); }
-    if (c == '=') { advance(); return Token(TokenType::TK_ASSIGN, "=", startLine, startCol); }
-    if (c == '(') { advance(); return Token(TokenType::TK_LPAREN, "(", startLine, startCol); }
-    if (c == ')') { advance(); return Token(TokenType::TK_RPAREN, ")", startLine, startCol); }
-
-    // Цифра — начало числа
-    if (std::isdigit(static_cast<unsigned char>(c))) {
-        return readNumber(startLine, startCol);
-    }
-
-    // Буква — начало имени переменной
-    if (std::isalpha(static_cast<unsigned char>(c))) {
-        return readIdent(startLine, startCol);
-    }
-
-    // Ни то ни другое — непонятный символ, кидаем ошибку
-    std::ostringstream oss;
-    oss << "Неожиданный символ '" << c
-        << "' (строка " << line_ << ", столбец " << col_ << ")";
-    throw LexerError(oss.str(), line_, col_);
-}
-
-// =============================================================================
-// Публичный API — именно эти методы вызывает парсер
-// =============================================================================
-
-// Взять следующий токен и сдвинуться вперёд.
-// Если до этого мы «подсматривали» (peek), берём из буфера — не читаем заново.
-Token Lexer::nextToken() {
-    if (hasPeeked_) {
-        hasPeeked_ = false;  // буфер опустел
-        return peeked_;
-    }
-    return readToken();
-}
-
-// Посмотреть следующий токен без сдвига.
-// Парсер использует это чтобы «посмотреть вперёд» и решить что делать.
-// При повторном вызове возвращает тот же токен (не двигается).
-Token Lexer::peekToken() {
-    if (!hasPeeked_) {
-        peeked_    = readToken();  // читаем и кладём в буфер
-        hasPeeked_ = true;
-    }
-    return peeked_;  // возвращаем из буфера, не сдвигаясь
+    // Always terminate the token stream with an EOF sentinel
+    tokens.emplace_back(TokenType::EOF_TOKEN, "$", line_, col_);
+    return tokens;
 }

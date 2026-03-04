@@ -1,166 +1,112 @@
 /*
- * main.cpp — точка входа программы.
+ * main.cpp — Entry point for the LL(1) struct syntax analyzer.
  *
- * Что делает эта программа в целом:
- *   1. Читаем строку из файла input.txt  (например: result = (a + 3) * b)
- *   2. Прогоняем её через лексер — он нарезает строку на токены
- *   3. Прогоняем токены через парсер — он строит дерево (AST)
- *   4. Прогоняем дерево через кодогенератор — он делает трёхадресный код
- *   5. Всё записываем в output.txt красиво, по разделам
+ * Processing pipeline
+ * -------------------
  *
- * Если где-то ошибка (кривая строка, лишний символ и т.д.) —
- * пишем об этом в output.txt и на экран (stderr), выходим с кодом 1.
+ *  ┌─────────────┐     ┌──────────────┐     ┌────────────┐     ┌──────────────┐
+ *  │ grammar.txt │────►│   Grammar    │────►│   Parser   │     │  Semantic    │
+ *  │             │     │  (LL1 check, │     │ (LL1 table │     │  Checker     │
+ *  │  input.txt  │────►│ parse table) │     │  driven)   │────►│ (dup names)  │
+ *  └─────────────┘     └──────────────┘     └────────────┘     └──────┬───────┘
+ *                                                                      │
+ *                                                               output.txt
+ *
+ * Output rules (checked in order):
+ *   1. "Grammar is not LL(1)"
+ *        — if the grammar has conflicts in any directing set.
+ *   2. "Syntax error at line L, position P"
+ *        — first syntax error found during LL(1) parsing.
+ *   3. "Name conflict: '<name>' redeclared at line L, position P"
+ *        — first duplicate field name within any struct.
+ *   4. "OK"
+ *        — everything is syntactically and semantically correct.
  */
 
-#include "ast.h"
-#include "codegen.h"
+#include "grammar.h"
 #include "lexer.h"
 #include "parser.h"
+#include "semantic.h"
 
 #include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string>
 
-// Вспомогательная функция для красивого заголовка раздела.
-// Рисует линию из '=', потом название раздела, потом ещё линию.
-static void printSection(std::ostream& os, int num, const std::string& title) {
-    const std::string line(72, '=');  // строка из 72 символов '='
-    os << "\n" << line << "\n";
-    os << "  РАЗДЕЛ " << num << ": " << title << "\n";
-    os << line << "\n\n";
-}
-
 int main() {
-    // -------------------------------------------------------------------------
-    // Шаг 1: открываем и читаем input.txt
-    // -------------------------------------------------------------------------
-    std::ifstream inFile("input.txt");
-    if (!inFile.is_open()) {
-        // is_open() вернёт false если файл не существует или нет прав на чтение
-        std::cerr << "Error: cannot open input.txt\n";
+    // =========================================================================
+    // Step 1: Load and validate the grammar
+    // =========================================================================
+    Grammar grammar;
+    if (!grammar.loadFromFile("grammar.txt")) {
+        std::cerr << "Error: cannot load grammar.txt\n";
         return 1;
     }
 
-    std::string inputLine;
-    if (!std::getline(inFile, inputLine)) {
-        // getline вернёт false если файл пустой
-        std::cerr << "Error: input.txt is empty\n";
-        return 1;
-    }
-    inFile.close();
-
-    // -------------------------------------------------------------------------
-    // Шаг 2: открываем output.txt для записи результатов
-    // -------------------------------------------------------------------------
-    std::ofstream outFile("output.txt");
-    if (!outFile.is_open()) {
+    // Open output file early so we can write the grammar-error message too
+    std::ofstream out("output.txt");
+    if (!out.is_open()) {
         std::cerr << "Error: cannot open output.txt for writing\n";
         return 1;
     }
 
-    // Пишем шапку файла
-    outFile << "========================================================================\n";
-    outFile << "  Парсер арифметических выражений на основе ДМПА (Recursive Descent)\n";
-    outFile << "  Теория языков программирования и методы трансляции\n";
-    outFile << "========================================================================\n";
-    outFile << "\n";
-    outFile << "Входная строка:\n";
-    outFile << "  " << inputLine << "\n";
+    // Check LL(1) property — must be done before constructing the parser
+    if (!grammar.isLL1()) {
+        out << "Grammar is not LL(1)\n";
+        return 0;
+    }
 
-    // -------------------------------------------------------------------------
-    // Шаг 3: лексический и синтаксический анализ
-    // Если в строке ошибка — поймаем исключение и запишем сообщение
-    // -------------------------------------------------------------------------
-    ASTNodePtr ast;  // сюда сохраним корень дерева
+    // =========================================================================
+    // Step 2: Read and tokenize input.txt
+    // =========================================================================
+    std::ifstream inputFile("input.txt");
+    if (!inputFile.is_open()) {
+        std::cerr << "Error: cannot open input.txt\n";
+        return 1;
+    }
+    std::ostringstream ss;
+    ss << inputFile.rdbuf();
+    std::string source = ss.str();
+
+    std::vector<Token> tokens;
     try {
-        Lexer  lexer(inputLine);   // создаём лексер с нашей строкой
-        Parser parser(lexer);      // создаём парсер, передаём ему лексер
-        ast = parser.parse();      // запускаем разбор, получаем дерево
-    }
-    catch (const LexerError& e) {
-        // Лексическая ошибка — непонятный символ
-        std::string msg = std::string("ЛЕКСИЧЕСКАЯ ОШИБКА: ") + e.what();
-        outFile << "\n" << msg << "\n";
-        std::cerr << msg << "\n";
-        return 1;
-    }
-    catch (const ParseError& e) {
-        // Синтаксическая ошибка — не соответствует грамматике
-        std::string msg = std::string("СИНТАКСИЧЕСКАЯ ОШИБКА: ") + e.what();
-        outFile << "\n" << msg << "\n";
-        std::cerr << msg << "\n";
-        return 1;
+        Lexer lexer(source);
+        tokens = lexer.tokenize();
+    } catch (const LexerError& e) {
+        // A lexical error is reported as a syntax error
+        out << "Syntax error at line " << e.line
+            << ", position " << e.col << "\n";
+        return 0;
     }
 
-    // -------------------------------------------------------------------------
-    // Шаг 4: генерация промежуточного кода (raw и optimized)
-    // -------------------------------------------------------------------------
-    CodeGen cg;           // создаём генератор
-    cg.generate(ast.get());  // ast.get() даёт сырой указатель из unique_ptr
+    // =========================================================================
+    // Step 3: LL(1) syntax analysis
+    // =========================================================================
+    Parser     parser(grammar);
+    ParseResult pr = parser.parse(tokens);
 
-    // =========================================================================
-    // РАЗДЕЛ 1: дерево разбора
-    // =========================================================================
-    printSection(outFile, 1, "ДЕРЕВО РАЗБОРА (АСД / AST)");
-    outFile << "Обозначения:\n";
-    outFile << "  AssignNode [x =]       -- присваивание переменной x\n";
-    outFile << "  BinaryOpNode ['+','*'] -- бинарная операция\n";
-    outFile << "  IdentNode  [name]      -- идентификатор (переменная)\n";
-    outFile << "  NumberNode [value]     -- числовая константа\n";
-    outFile << "  Отступ 2 пробела на каждый уровень вложенности.\n\n";
-    // print() рекурсивно рисует всё дерево начиная с корня
-    ast->print(outFile, 0);
-
-    // =========================================================================
-    // РАЗДЕЛ 2: таблица символов
-    // =========================================================================
-    printSection(outFile, 2, "ТАБЛИЦА СИМВОЛОВ (Table of Names)");
-    outFile << "Тип/Kind:\n";
-    outFile << "  variable -- идентификатор (переменная)\n";
-    outFile << "  integer  -- целочисленная константа\n";
-    outFile << "  float    -- вещественная или экспоненциальная константа\n\n";
-    cg.printSymbolTable(outFile);
-
-    // =========================================================================
-    // РАЗДЕЛ 3: неоптимизированный трёхадресный код
-    // =========================================================================
-    printSection(outFile, 3, "НЕОПТИМИЗИРОВАННЫЙ ПРОМЕЖУТОЧНЫЙ КОД (3-Address Code)");
-    outFile << "Каждая бинарная операция порождает новую временную переменную ti.\n";
-    outFile << "Результат присваивания -- явная инструкция копирования.\n\n";
-    cg.printRawCode(outFile);
-
-    // =========================================================================
-    // РАЗДЕЛ 4: оптимизированный код
-    // =========================================================================
-    printSection(outFile, 4, "ОПТИМИЗИРОВАННЫЙ КОД (Constant Folding)");
-    outFile << "Применённые оптимизации:\n";
-    outFile << "  1. Свёртка констант: подвыражение с двумя константами\n";
-    outFile << "     вычисляется в compile-time (напр. 2 + 5 => 7).\n";
-    outFile << "  2. Устранение лишнего копирования: последняя временная\n";
-    outFile << "     переменная переименовывается в целевую (result = t_N => убирается).\n";
-
-    // Сообщаем применялась ли свёртка констант
-    if (cg.wasFoldingApplied()) {
-        outFile << "\n  [+] Свёртка констант применена!\n\n";
-    } else {
-        outFile << "\n  [-] Свёртка констант не применялась\n";
-        outFile << "      (в выражении нет подвыражений из одних констант).\n\n";
+    if (!pr.ok) {
+        out << "Syntax error at line " << pr.line
+            << ", position " << pr.col << "\n";
+        return 0;
     }
-    cg.printOptCode(outFile);
 
     // =========================================================================
-    // Финальная черта — всё готово
+    // Step 4: Semantic analysis — duplicate field names
     // =========================================================================
-    outFile << "\n";
-    const std::string footer(72, '-');
-    outFile << footer << "\n";
-    outFile << "  Разбор успешно завершён.\n";
-    outFile << footer << "\n";
+    SemanticChecker checker;
+    SemanticResult  sr = checker.check(tokens);
 
-    outFile.close();
+    if (!sr.ok) {
+        out << "Name conflict: '" << sr.name
+            << "' redeclared at line " << sr.line
+            << ", position " << sr.col << "\n";
+        return 0;
+    }
 
-    // Пишем в консоль только ASCII — Git Bash на Windows иначе показывает кракозябры
-    std::cout << "Done! Result written to output.txt\n";
+    // =========================================================================
+    // Step 5: All checks passed
+    // =========================================================================
+    out << "OK\n";
     return 0;
 }

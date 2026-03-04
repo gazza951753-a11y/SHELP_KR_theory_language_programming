@@ -1,40 +1,41 @@
 # =============================================================================
-# Makefile — сборка парсера арифметических выражений (ДМПА)
+# Makefile — LL(1) struct syntax analyzer
 #
-# Цели:
-#   make          — собрать исполняемый файл parser
-#   make run      — собрать и запустить (читает input.txt, пишет output.txt)
-#   make clean    — удалить объектные файлы и бинарник
-#   make check    — запустить на трёх тестовых примерах
+# Targets:
+#   make          — build the analyzer executable
+#   make run      — build and run (reads grammar.txt + input.txt → output.txt)
+#   make test     — run three built-in test scenarios
+#   make clean    — remove compiled files and the executable
 # =============================================================================
 
 CXX      := g++
 CXXFLAGS := -std=c++17 -Wall -Wextra -Wpedantic -O2
 
-TARGET := parser
-SRCS   := main.cpp lexer.cpp parser.cpp codegen.cpp
+TARGET := analyzer
+SRCS   := main.cpp lexer.cpp grammar.cpp parser.cpp semantic.cpp
 OBJS   := $(SRCS:.cpp=.o)
 
-# Правило по умолчанию
+# Default target
 .PHONY: all
 all: $(TARGET)
 
-# Компоновка
+# Link
 $(TARGET): $(OBJS)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 	@echo "Build OK: ./$(TARGET)"
 
-# Компиляция каждого .cpp
+# Compile each .cpp
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
-# Зависимости заголовков
-main.o:    main.cpp    ast.h lexer.h parser.h codegen.h
-lexer.o:   lexer.cpp   lexer.h
-parser.o:  parser.cpp  parser.h ast.h lexer.h
-codegen.o: codegen.cpp codegen.h ast.h
+# Explicit header dependencies
+main.o:     main.cpp     grammar.h lexer.h parser.h semantic.h
+lexer.o:    lexer.cpp    lexer.h
+grammar.o:  grammar.cpp  grammar.h
+parser.o:   parser.cpp   parser.h grammar.h lexer.h
+semantic.o: semantic.cpp semantic.h lexer.h
 
-# Запуск
+# Run
 .PHONY: run
 run: $(TARGET)
 	./$(TARGET)
@@ -42,28 +43,57 @@ run: $(TARGET)
 	@echo "=== output.txt ==="
 	@cat output.txt
 
-# Тесты
-.PHONY: check
-check: $(TARGET)
-	@echo "--- Тест 1: базовый (переменные и числа) ---"
-	@echo "result = (a + 3) * (b + 2 + 5)" > input.txt
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+.PHONY: test
+test: $(TARGET)
+	@echo ""
+	@echo "======================================================================"
+	@echo "  TEST 1: Correct struct (no errors expected → OK)"
+	@echo "======================================================================"
+	@printf 'struct Point {\n    int x;\n    double y;\n};\n' > input.txt
 	@./$(TARGET)
 	@cat output.txt
-	@echo ""
-	@echo "--- Тест 2: свёртка констант ---"
-	@echo "x = (2 + 3) * (4 + 5)" > input.txt
-	@./$(TARGET)
-	@cat output.txt
-	@echo ""
-	@echo "--- Тест 3: числа в научной нотации ---"
-	@echo "val = mass * 1e+18 + offset" > input.txt
-	@./$(TARGET)
-	@cat output.txt
-	@echo ""
-	# Восстановить исходный input.txt
-	@echo "result = (a + 3) * (b + 2 + 5)" > input.txt
 
-# Очистка
+	@echo ""
+	@echo "======================================================================"
+	@echo "  TEST 2: Duplicate field name (→ Name conflict)"
+	@echo "======================================================================"
+	@printf 'struct Bad {\n    int x;\n    float x;\n};\n' > input.txt
+	@./$(TARGET)
+	@cat output.txt
+
+	@echo ""
+	@echo "======================================================================"
+	@echo "  TEST 3: Syntax error – missing semicolon"
+	@echo "======================================================================"
+	@printf 'struct Broken {\n    int x\n};\n' > input.txt
+	@./$(TARGET)
+	@cat output.txt
+
+	@echo ""
+	@echo "======================================================================"
+	@echo "  TEST 4: Array field + user-defined type (→ OK)"
+	@echo "======================================================================"
+	@printf 'struct Grid {\n    int data[10];\n    Point origin;\n};\n' > input.txt
+	@./$(TARGET)
+	@cat output.txt
+
+	@echo ""
+	@echo "======================================================================"
+	@echo "  TEST 5: Multiple structs, second one has conflict"
+	@echo "======================================================================"
+	@printf 'struct A {\n    int x;\n};\nstruct B {\n    bool flag;\n    bool flag;\n};\n' > input.txt
+	@./$(TARGET)
+	@cat output.txt
+
+	@echo ""
+	@echo "Restoring original input.txt..."
+	@printf 'struct Point {\n    int x;\n    double y;\n    float z;\n};\n\nstruct Rectangle {\n    Point topLeft;\n    Point bottomRight;\n    int width;\n    int width;\n};\n\nstruct Empty {};\n' > input.txt
+	@echo "Done."
+
+# Clean
 .PHONY: clean
 clean:
 	rm -f $(OBJS) $(TARGET)

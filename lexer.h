@@ -1,119 +1,154 @@
 /*
- * lexer.h — лексический анализатор (его ещё называют «токенизатор»).
+ * lexer.h — Tokenizer (Lexical Analyzer) for C++ struct declarations.
  *
- * Смысл лексера простой: берём строку типа
- *     result = (a + 3) * b
- * и нарезаем её на отдельные «слова» — токены:
- *     [result] [=] [(] [a] [+] [3] [)] [*] [b]
+ * Responsibility:
+ *   Scan raw source text character by character and produce a flat sequence
+ *   of typed tokens.  Every token records its EXACT line and column so that
+ *   error messages can point the user to the right place.
  *
- * Каждый токен — это пара «тип + значение». Парсер потом читает
- * эти токены один за другим и строит дерево.
+ * Token taxonomy:
+ *   ┌─────────────────┬──────────────────────────────────────────────────┐
+ *   │ TokenType       │ What it represents                               │
+ *   ├─────────────────┼──────────────────────────────────────────────────┤
+ *   │ KW_STRUCT       │ keyword  "struct"                                │
+ *   │ KW_INT          │ keyword  "int"                                   │
+ *   │ KW_DOUBLE       │ keyword  "double"                                │
+ *   │ KW_FLOAT        │ keyword  "float"                                 │
+ *   │ KW_CHAR         │ keyword  "char"                                  │
+ *   │ KW_BOOL         │ keyword  "bool"                                  │
+ *   │ KW_STRING       │ keyword  "string"                                │
+ *   │ IDENTIFIER      │ any other [A-Za-z_][A-Za-z0-9_]* word           │
+ *   │                 │  → grammar terminal  <identifier>               │
+ *   │ INTEGER         │ [0-9]+                                           │
+ *   │                 │  → grammar terminal  <integer>                  │
+ *   │ LBRACE          │ '{'                                              │
+ *   │ RBRACE          │ '}'                                              │
+ *   │ SEMICOLON       │ ';'                                              │
+ *   │ LBRACKET        │ '['                                              │
+ *   │ RBRACKET        │ ']'                                              │
+ *   │ EOF_TOKEN       │ end of input                                     │
+ *   └─────────────────┴──────────────────────────────────────────────────┘
  *
- * Какие токены мы умеем распознавать:
- *   TK_ID      — имя переменной: буква, потом буквы/цифры  (a, result, x1)
- *   TK_NUMBER  — число: целое (42), дробное (3.14), научная нотация (1e+18)
- *   TK_PLUS    — знак '+'
- *   TK_STAR    — знак '*'
- *   TK_ASSIGN  — знак '=' (присваивание)
- *   TK_LPAREN  — открывающая скобка '('
- *   TK_RPAREN  — закрывающая скобка ')'
- *   TK_EOF     — конец строки, больше токенов нет
- *
- * Если встретится что-то непонятное — бросаем LexerError с номером строки и столбца.
+ * The method grammarSymbol() maps each TokenType to the string that is used
+ * as a terminal inside grammar.txt and the parse table (e.g. "struct",
+ * "<identifier>", "{", "$").  This bridges the gap between the lexer and the
+ * grammar/parser layers.
  */
 
 #pragma once
 
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 // =============================================================================
-// Перечисление всех возможных типов токенов
+// Token types
 // =============================================================================
 enum class TokenType {
-    TK_ID,      // имя переменной
-    TK_NUMBER,  // число (любое: целое, дробное, экспоненциальное)
-    TK_PLUS,    // '+'
-    TK_STAR,    // '*'
-    TK_ASSIGN,  // '='
-    TK_LPAREN,  // '('
-    TK_RPAREN,  // ')'
-    TK_EOF      // конец ввода
+    // Keywords
+    KW_STRUCT,
+    KW_INT,
+    KW_DOUBLE,
+    KW_FLOAT,
+    KW_CHAR,
+    KW_BOOL,
+    KW_STRING,
+
+    // Generic tokens whose exact text matters
+    IDENTIFIER,   // grammar terminal: <identifier>
+    INTEGER,      // grammar terminal: <integer>
+
+    // Single-character punctuation
+    LBRACE,       // {
+    RBRACE,       // }
+    SEMICOLON,    // ;
+    LBRACKET,     // [
+    RBRACKET,     // ]
+
+    // Sentinel
+    EOF_TOKEN     // grammar terminal: $
 };
 
-// Вспомогательная функция — возвращает название типа токена строкой.
-// Используется только в сообщениях об ошибках, чтобы было понятно читать.
-std::string tokenTypeName(TokenType t);
-
 // =============================================================================
-// Структура одного токена
+// Token — one lexeme with its location
 // =============================================================================
 struct Token {
-    TokenType   type;   // что это за токен
-    std::string value;  // текст токена как в исходнике (например "3.14" или "+")
-    int         line;   // строка в исходнике (начинаем считать с 1)
-    int         col;    // столбец в исходнике (начинаем считать с 1)
+    TokenType   type;   // what kind of token
+    std::string value;  // the raw text  (e.g. "Point", "42", "{")
+    int         line;   // 1-based source line
+    int         col;    // 1-based source column (start of lexeme)
 
-    Token(TokenType type, std::string value, int line, int col)
-        : type(type), value(std::move(value)), line(line), col(col) {}
+    Token(TokenType t, std::string v, int l, int c)
+        : type(t), value(std::move(v)), line(l), col(c) {}
+
+    /*
+     * grammarSymbol() — convert this token to the string key used in the
+     * grammar and parse table.
+     *
+     *   KW_INT      → "int"
+     *   IDENTIFIER  → "<identifier>"
+     *   LBRACE      → "{"
+     *   EOF_TOKEN   → "$"
+     *   ...
+     */
+    std::string grammarSymbol() const;
+
+    // Human-readable type name for error messages
+    std::string typeName() const;
 };
 
 // =============================================================================
-// Класс лексера
-// =============================================================================
-class Lexer {
-public:
-    // Конструктор — принимает всю строку для анализа и запоминает её
-    explicit Lexer(const std::string& source);
-
-    // Взять следующий токен и сдвинуть позицию вперёд
-    Token nextToken();
-
-    // Подсмотреть следующий токен БЕЗ сдвига (lookahead).
-    // Нужен парсеру, чтобы решить что делать дальше, не «съедая» токен.
-    Token peekToken();
-
-private:
-    std::string src_;      // вся строка исходника
-    size_t      pos_;      // текущая позиция (индекс символа в src_)
-    int         line_;     // текущая строка
-    int         col_;      // текущий столбец
-
-    bool  hasPeeked_;      // флаг: мы уже «подсмотрели» токен вперёд?
-    Token peeked_;         // сам подсмотренный токен (если hasPeeked_ == true)
-
-    // Вернуть символ в текущей позиции (или '\0' если дошли до конца)
-    char current() const;
-
-    // Вернуть текущий символ и сдвинуться на один вперёд.
-    // Заодно обновляем счётчики строки и столбца.
-    char advance();
-
-    // Пропустить все пробелы, табуляции и переводы строк
-    void skipWhitespace();
-
-    // Прочитать числовой литерал начиная с текущей позиции
-    Token readNumber(int startLine, int startCol);
-
-    // Прочитать идентификатор начиная с текущей позиции
-    Token readIdent(int startLine, int startCol);
-
-    // Прочитать один токен (внутренний метод, без учёта peek-буфера)
-    Token readToken();
-
-    // Проверить, закончилась ли строка
-    bool atEnd() const;
-};
-
-// =============================================================================
-// Исключение лексической ошибки
-// Бросается когда встречается непонятный символ
+// LexerError — thrown when an unexpected character is encountered
 // =============================================================================
 class LexerError : public std::runtime_error {
 public:
-    int line;  // строка где ошибка
-    int col;   // столбец где ошибка
+    int line, col;
+    LexerError(const std::string& msg, int l, int c)
+        : std::runtime_error(msg), line(l), col(c) {}
+};
 
-    LexerError(const std::string& msg, int line, int col)
-        : std::runtime_error(msg), line(line), col(col) {}
+// =============================================================================
+// Lexer — iterates over source text and produces tokens
+// =============================================================================
+class Lexer {
+public:
+    /*
+     * Constructor.
+     * @param source  Complete source text to tokenize (may be multi-line).
+     */
+    explicit Lexer(const std::string& source);
+
+    /*
+     * tokenize() — scan the entire source and return all tokens.
+     * The last token is always EOF_TOKEN.
+     * Throws LexerError on invalid characters.
+     */
+    std::vector<Token> tokenize();
+
+private:
+    std::string src_;   // source text
+    size_t      pos_;   // current character index into src_
+    int         line_;  // current line (1-based)
+    int         col_;   // current column (1-based)
+
+    // Peek at current character (or '\0' at end)
+    char cur() const;
+
+    // Peek at src_[pos_ + offset] (or '\0')
+    char peek(size_t offset = 1) const;
+
+    // Consume current character, update line/col counters, return it
+    char advance();
+
+    // Skip whitespace and C++ line comments (//)
+    void skipWhitespace();
+
+    // Read identifier or keyword starting at current position
+    Token readIdentifierOrKeyword();
+
+    // Read integer literal starting at current position
+    Token readInteger();
+
+    // True when pos_ >= src_.size()
+    bool atEnd() const;
 };

@@ -1,1 +1,14 @@
-result = (a + 3) * (b + 2 + 5)
+struct Point {
+    int x;
+    double y;
+    float z;
+};
+
+struct Rectangle {
+    Point topLeft;
+    Point bottomRight;
+    int width;
+    int width;
+};
+
+struct Empty {};
