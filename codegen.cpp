@@ -170,7 +170,7 @@ std::string CodeGen::genRaw(const ASTNode* node) {
     else if (auto* n = dynamic_cast<const NumberNode*>(node)) {
         return n->raw;
     }
-    throw std::runtime_error("genRaw: unknown AST node type");
+    throw std::runtime_error("genRaw: неизвестный тип узла АСД");
 }
 
 // =============================================================================

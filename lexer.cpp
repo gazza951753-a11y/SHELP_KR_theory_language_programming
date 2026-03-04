@@ -106,8 +106,8 @@ Token Lexer::readNumber(int startLine, int startCol) {
 
         if (atEnd() || !std::isdigit(static_cast<unsigned char>(current()))) {
             std::ostringstream oss;
-            oss << "Expected digits after exponent in number \""
-                << num << "\" (line " << startLine << ", col " << startCol << ")";
+            oss << "Ожидаются цифры после показателя экспоненты в числе \""
+                << num << "\" (строка " << startLine << ", столбец " << startCol << ")";
             throw LexerError(oss.str(), startLine, startCol);
         }
 
@@ -162,10 +162,10 @@ Token Lexer::readToken() {
         return readIdent(startLine, startCol);
     }
 
-    // Unknown character -- error
+    // Неизвестный символ — ошибка
     std::ostringstream oss;
-    oss << "Unexpected character '" << c
-        << "' (line " << line_ << ", col " << col_ << ")";
+    oss << "Неожиданный символ '" << c
+        << "' (строка " << line_ << ", столбец " << col_ << ")";
     throw LexerError(oss.str(), line_, col_);
 }
 

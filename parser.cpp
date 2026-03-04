@@ -31,10 +31,10 @@ ASTNodePtr Parser::parse() {
     Token tok = lexer_.peekToken();
     if (tok.type != TokenType::TK_EOF) {
         std::ostringstream oss;
-        oss << "Unexpected token " << tokenTypeName(tok.type)
+        oss << "Неожиданный токен " << tokenTypeName(tok.type)
             << " (\"" << tok.value << "\")"
-            << " at line " << tok.line << ", col " << tok.col
-            << "; expected end of input";
+            << " — строка " << tok.line << ", столбец " << tok.col
+            << "; ожидался конец ввода";
         throw ParseError(oss.str(), tok.line, tok.col);
     }
 
@@ -130,10 +130,10 @@ ASTNodePtr Parser::parseFactor() {
 
     // Неожиданный токен — синтаксическая ошибка
     std::ostringstream oss;
-    oss << "Expected '(', number, or identifier"
-        << ", got " << tokenTypeName(tok.type)
+    oss << "Ожидалось '(', число или идентификатор"
+        << ", но встречен " << tokenTypeName(tok.type)
         << " (\"" << tok.value << "\")"
-        << " at line " << tok.line << ", col " << tok.col;
+        << " — строка " << tok.line << ", столбец " << tok.col;
     throw ParseError(oss.str(), tok.line, tok.col);
 }
 
@@ -144,10 +144,10 @@ Token Parser::expect(TokenType type) {
     Token tok = lexer_.nextToken();
     if (tok.type != type) {
         std::ostringstream oss;
-        oss << "Expected " << tokenTypeName(type)
-            << ", got " << tokenTypeName(tok.type)
+        oss << "Ожидался " << tokenTypeName(type)
+            << ", но встречен " << tokenTypeName(tok.type)
             << " (\"" << tok.value << "\")"
-            << " at line " << tok.line << ", col " << tok.col;
+            << " — строка " << tok.line << ", столбец " << tok.col;
         throw ParseError(oss.str(), tok.line, tok.col);
     }
     return tok;
