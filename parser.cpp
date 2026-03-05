@@ -1,53 +1,51 @@
 /*
- * parser.cpp — LL(1) table-driven parser implementation.
+ * parser.cpp — реализация LL(1)-парсера методом нисходящего разбора.
  *
- * The core idea is simple: we simulate a pushdown automaton by managing an
- * explicit stack of grammar symbols and consulting the pre-built parse table
- * to decide which rule to apply at each step.
+ * Основная идея: имитируем работу магазинного автомата (МП-автомата),
+ * управляя явным стеком грамматических символов и обращаясь к таблице разбора,
+ * чтобы решить, какое правило применить на каждом шаге.
  *
- * Detailed walkthrough of the algorithm
- * ======================================
+ * Подробный разбор алгоритма
+ * ==========================
  *
- *  Initialise:
- *    stack  ← [ "$", startSymbol ]        ($ is the bottom sentinel)
- *    pos    ← 0                            (index into tokens[])
+ *  Инициализация:
+ *    стек  ← [ "$", стартовый_символ ]   ($ — на дне стека, sentinel)
+ *    pos   ← 0                            (индекс в массиве tokens[])
  *
- *  Loop (while stack is not empty):
+ *  Цикл (пока стек не пуст):
  *
- *    top  ← stack.top()
- *    tok  ← tokens[pos]                   (current lookahead)
- *    sym  ← tok.grammarSymbol()           (grammar terminal string)
+ *    top  ← вершина стека
+ *    tok  ← tokens[pos]                  (текущий lookahead-токен)
+ *    sym  ← tok.grammarSymbol()          (строка-терминал грамматики)
  *
  *    ┌──────────────────────────────────────────────────────────────────┐
- *    │ A. top == "$"                                                    │
- *    │    ├─ sym == "$"  →  ACCEPT (return success)                    │
- *    │    └─ sym != "$"  →  ERROR  (extra input)                       │
+ *    │ А. top == "$"                                                    │
+ *    │    ├─ sym == "$"  →  УСПЕХ (возвращаем success)                 │
+ *    │    └─ sym != "$"  →  ОШИБКА (лишние токены в потоке)           │
  *    │                                                                  │
- *    │ B. top is TERMINAL                                               │
- *    │    ├─ top == sym  →  MATCH: pop top, advance pos                │
- *    │    └─ top != sym  →  ERROR (expected top, got sym)              │
+ *    │ Б. top — ТЕРМИНАЛ                                                │
+ *    │    ├─ top == sym  →  СОВПАДЕНИЕ: снимаем top, pos++             │
+ *    │    └─ top != sym  →  ОШИБКА (ожидали top, получили sym)        │
  *    │                                                                  │
- *    │ C. top is NONTERMINAL                                            │
+ *    │ В. top — НЕТЕРМИНАЛ                                              │
  *    │    table = parseTable[top]                                       │
- *    │    ├─ table has entry for sym:                                   │
+ *    │    ├─ есть запись для sym:                                       │
  *    │    │    rule ← rules[table[sym]]                                 │
- *    │    │    pop top                                                  │
- *    │    │    push rule.rhs in REVERSE order                           │
- *    │    │      (leftmost symbol of rhs ends up on top of stack)       │
- *    │    │    If rhs is empty (ε rule) → nothing is pushed            │
- *    │    └─ no entry for sym  →  ERROR (unexpected token)             │
+ *    │    │    снимаем top                                              │
+ *    │    │    добавляем rule.rhs в ОБРАТНОМ порядке                   │
+ *    │    │      (чтобы первый символ rhs оказался на вершине стека)   │
+ *    │    │    Если rhs пуст (ε-правило) → ничего не добавляем        │
+ *    │    └─ нет записи для sym  →  ОШИБКА (неожиданный токен)        │
  *    └──────────────────────────────────────────────────────────────────┘
  *
- *  The loop terminates because:
- *    • Every MATCH advances pos by 1 (strictly progresses through input).
- *    • Every rule expansion reduces the nonterminal count on the stack
- *      (there are no infinitely-growing grammars in LL(1) grammars without
- *       ε cycles, and our grammar is ε-free or has acyclic ε derivations).
+ *  Завершение цикла гарантировано:
+ *    • Каждое СОВПАДЕНИЕ продвигает pos на 1 (строгий прогресс по вводу).
+ *    • Каждое раскрытие правила уменьшает число нетерминалов в стеке
+ *      (в LL(1)-грамматиках без ε-циклов это всегда конечно).
  *
- *  Error reporting:
- *    On any error path we record the line and column of the current
- *    lookahead token — that is the position in the source that caused the
- *    failure.
+ *  Сообщения об ошибках:
+ *    При любой ошибке записываем строку и столбец текущего lookahead-токена —
+ *    именно эта позиция в исходнике и является местом синтаксической ошибки.
  */
 
 #include "parser.h"
@@ -56,7 +54,7 @@
 #include <stack>
 
 // ---------------------------------------------------------------------------
-// Constructor
+// Конструктор
 // ---------------------------------------------------------------------------
 
 Parser::Parser(const Grammar& grammar)
@@ -64,35 +62,35 @@ Parser::Parser(const Grammar& grammar)
 {}
 
 // ---------------------------------------------------------------------------
-// parse()
+// parse() — основной метод разбора
 // ---------------------------------------------------------------------------
 
 ParseResult Parser::parse(const std::vector<Token>& tokens) const {
-    // Safety: tokens must contain at least the EOF sentinel.
+    // Проверка: поток токенов не должен быть пустым
     if (tokens.empty()) {
-        return ParseResult::error(1, 1, "Empty token stream");
+        return ParseResult::error(1, 1, "Пустой поток токенов");
     }
 
     const auto& table = grammar_.getParseTable();
     const auto& rules = grammar_.getRules();
 
     // -------------------------------------------------------------------------
-    // Initialise the parse stack.
-    // We push "$" first (bottom sentinel), then the start symbol on top.
+    // Инициализируем стек разбора.
+    // Сначала кладём "$" (дно-sentinel), потом стартовый символ на вершину.
     // -------------------------------------------------------------------------
     std::stack<std::string> stk;
     stk.push("$");
     stk.push(grammar_.getStartSymbol());
 
-    size_t pos = 0;  // current position in the token vector
+    size_t pos = 0;  // текущая позиция в векторе токенов
 
-    // Accessor for the current lookahead token
+    // Вспомогательная лямбда для удобного доступа к текущему токену
     auto currentToken = [&]() -> const Token& {
         return tokens[pos];
     };
 
     // -------------------------------------------------------------------------
-    // Main parsing loop
+    // Главный цикл разбора
     // -------------------------------------------------------------------------
     while (!stk.empty()) {
         const std::string& top = stk.top();
@@ -100,34 +98,34 @@ ParseResult Parser::parse(const std::vector<Token>& tokens) const {
         const std::string& sym = tok.grammarSymbol();
 
         // ------------------------------------------------------------------
-        // Case A: bottom-of-stack sentinel
+        // Случай А: достигли дна стека (маркер $)
         // ------------------------------------------------------------------
         if (top == "$") {
             if (sym == "$") {
-                // Both the stack and the input are exhausted → success!
+                // Стек и ввод одновременно исчерпаны — разбор успешен!
                 return ParseResult::success();
             } else {
-                // Stack is done but input still has tokens → extra tokens
+                // Стек пуст, но токены ещё есть — лишний ввод
                 std::ostringstream msg;
-                msg << "Unexpected token '" << tok.value
-                    << "' (" << tok.typeName() << ") after end of input";
+                msg << "Неожиданный токен '" << tok.value
+                    << "' (" << tok.typeName() << ") после конца ввода";
                 return ParseResult::error(tok.line, tok.col, msg.str());
             }
         }
 
         // ------------------------------------------------------------------
-        // Case B: top of stack is a TERMINAL
+        // Случай Б: вершина стека — ТЕРМИНАЛ
         // ------------------------------------------------------------------
         if (grammar_.isTerminal(top)) {
             if (top == sym) {
-                // The expected terminal matches the current token → consume both
+                // Терминал совпал с текущим токеном — снимаем и двигаемся дальше
                 stk.pop();
                 ++pos;
             } else {
-                // Mismatch between expected terminal and actual token
+                // Несовпадение: ожидали один терминал, получили другой
                 std::ostringstream msg;
-                msg << "Expected '" << top
-                    << "' but got '" << tok.value
+                msg << "Ожидался '" << top
+                    << "', но встречен '" << tok.value
                     << "' (" << tok.typeName() << ")";
                 return ParseResult::error(tok.line, tok.col, msg.str());
             }
@@ -135,32 +133,30 @@ ParseResult Parser::parse(const std::vector<Token>& tokens) const {
         }
 
         // ------------------------------------------------------------------
-        // Case C: top of stack is a NONTERMINAL
+        // Случай В: вершина стека — НЕТЕРМИНАЛ
         // ------------------------------------------------------------------
 
-        // Look up the parse table entry for (top, sym)
+        // Ищем строку таблицы для данного нетерминала
         auto ntIt = table.find(top);
         if (ntIt == table.end()) {
-            // No entries at all for this nonterminal (shouldn't happen with
-            // a valid grammar but guard against it).
+            // Нетерминала нет в таблице — внутренняя ошибка (не должно случиться)
             std::ostringstream msg;
-            msg << "Internal error: no parse table entry for nonterminal '"
+            msg << "Внутренняя ошибка: нет строки таблицы для нетерминала '"
                 << top << "'";
             return ParseResult::error(tok.line, tok.col, msg.str());
         }
 
         auto termIt = ntIt->second.find(sym);
         if (termIt == ntIt->second.end()) {
-            // No rule for this (nonterminal, terminal) pair → syntax error.
-            //
-            // Build a helpful error message listing what was expected.
+            // Для пары (нетерминал, терминал) нет правила → синтаксическая ошибка.
+            // Формируем полезное сообщение с перечислением ожидаемых токенов.
             std::ostringstream msg;
-            msg << "Unexpected token '" << tok.value
+            msg << "Неожиданный токен '" << tok.value
                 << "' (" << tok.typeName() << ")";
 
-            // Optionally list the expected terminals from the table row
+            // Показываем, какие терминалы были допустимы в данной позиции
             if (!ntIt->second.empty()) {
-                msg << "; expected one of: ";
+                msg << "; ожидался один из: ";
                 bool first = true;
                 for (const auto& kv : ntIt->second) {
                     if (!first) msg << ", ";
@@ -172,34 +168,33 @@ ParseResult Parser::parse(const std::vector<Token>& tokens) const {
             return ParseResult::error(tok.line, tok.col, msg.str());
         }
 
-        // Found a matching rule
+        // Нашли подходящее правило в таблице
         int        ruleIdx = termIt->second;
         const Rule& rule   = rules[ruleIdx];
 
-        // Pop the nonterminal from the stack
+        // Снимаем нетерминал с вершины стека
         stk.pop();
 
-        // Push the RHS symbols in REVERSE order so that the leftmost symbol
-        // ends up on top of the stack (to be processed first).
+        // Добавляем символы правой части правила в ОБРАТНОМ порядке,
+        // чтобы первый символ правой части оказался на вершине стека.
         //
-        // Example: rule  STRUCTDECL → struct <identifier> { FIELDLIST } ;
-        //   Push in order:  ;  }  FIELDLIST  {  <identifier>  struct
-        //   After push, top of stack = "struct"  ✓
+        // Пример: правило STRUCTDECL → struct <identifier> { FIELDLIST } ;
+        //   Добавляем в порядке: ;  }  FIELDLIST  {  <identifier>  struct
+        //   После добавления на вершине стека: "struct" — и это правильно!
         for (int j = static_cast<int>(rule.rhs.size()) - 1; j >= 0; --j) {
             stk.push(rule.rhs[j]);
         }
-        // If rule.rhs is empty (ε production) → nothing is pushed, effectively
-        // erasing the nonterminal from the stack.
+        // Если правая часть пуста (ε-правило) — ничего не добавляем,
+        // нетерминал просто «исчезает» из стека.
     }
 
-    // Stack exhausted — we should have returned success inside the loop,
-    // but handle the edge case where the EOF token might not have been
-    // consumed yet.
+    // Стек опустел — должны были вернуть success внутри цикла,
+    // но обрабатываем граничный случай, когда EOF ещё не потреблён.
     if (currentToken().grammarSymbol() == "$") {
         return ParseResult::success();
     }
 
     return ParseResult::error(
         currentToken().line, currentToken().col,
-        "Unexpected tokens remaining after parse");
+        "Остались непотреблённые токены после завершения разбора");
 }

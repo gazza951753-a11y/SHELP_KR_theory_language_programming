@@ -1,26 +1,28 @@
 /*
- * main.cpp — Entry point for the LL(1) struct syntax analyzer.
+ * main.cpp — главный файл программы, точка входа.
  *
- * Processing pipeline
- * -------------------
+ * Курсовая работа по дисциплине "Теория языков программирования и методы трансляции"
+ * Томский политехнический университет, кафедра ВТ, 3 курс
+ *
+ * Задача: разработать анализатор объявлений структур на C++.
+ * Программа выполняет лексический, синтаксический (LL(1)) и семантический анализ.
+ *
+ * Общий конвейер обработки:
  *
  *  ┌─────────────┐     ┌──────────────┐     ┌────────────┐     ┌──────────────┐
  *  │ grammar.txt │────►│   Grammar    │────►│   Parser   │     │  Semantic    │
- *  │             │     │  (LL1 check, │     │ (LL1 table │     │  Checker     │
- *  │  input.txt  │────►│ parse table) │     │  driven)   │────►│ (dup names)  │
- *  └─────────────┘     └──────────────┘     └────────────┘     └──────┬───────┘
- *                                                                      │
- *                                                               output.txt
+ *  │             │     │ (проверка    │     │ (табличный │     │  Checker     │
+ *  │  input.txt  │────►│  LL(1),      │     │  LL(1)     │────►│  (дубли имён)│
+ *  └─────────────┘     │  таблица     │     │  разбор)   │     └──────┬───────┘
+ *                      │  разбора)    │     └────────────┘            │
+ *                      └──────────────┘                        output.txt
  *
- * Output rules (checked in order):
- *   1. "Grammar is not LL(1)"
- *        — if the grammar has conflicts in any directing set.
- *   2. "Syntax error at line L, position P"
- *        — first syntax error found during LL(1) parsing.
- *   3. "Name conflict: '<name>' redeclared at line L, position P"
- *        — first duplicate field name within any struct.
- *   4. "OK"
- *        — everything is syntactically and semantically correct.
+ * Порядок проверок (важно — первая ошибка останавливает анализ):
+ *   1. "Grammar is not LL(1)"      — грамматика не является LL(1), конфликты
+ *   2. "Syntax error at line L, position P" — синтаксическая ошибка при разборе
+ *   3. "Name conflict: '<name>' redeclared at line L, position P" — повторное
+ *        объявление поля в одной структуре
+ *   4. "OK"                        — всё корректно
  */
 
 #include "grammar.h"
@@ -35,35 +37,36 @@
 
 int main() {
     // =========================================================================
-    // Step 1: Load and validate the grammar
+    // Шаг 1: загружаем грамматику из файла и проверяем, является ли она LL(1)
     // =========================================================================
     Grammar grammar;
     if (!grammar.loadFromFile("grammar.txt")) {
-        std::cerr << "Error: cannot load grammar.txt\n";
+        std::cerr << "Ошибка: не удалось открыть grammar.txt\n";
         return 1;
     }
 
-    // Open output file early so we can write the grammar-error message too
+    // Открываем файл вывода заранее, чтобы записать туда и ошибку грамматики
     std::ofstream out("output.txt");
     if (!out.is_open()) {
-        std::cerr << "Error: cannot open output.txt for writing\n";
+        std::cerr << "Ошибка: не удалось открыть output.txt для записи\n";
         return 1;
     }
 
-    // Check LL(1) property — must be done before constructing the parser
+    // Проверка свойства LL(1) — нужно сделать до создания парсера
     if (!grammar.isLL1()) {
         out << "Grammar is not LL(1)\n";
         return 0;
     }
 
     // =========================================================================
-    // Step 2: Read and tokenize input.txt
+    // Шаг 2: читаем входной файл и запускаем лексический анализ (токенизацию)
     // =========================================================================
     std::ifstream inputFile("input.txt");
     if (!inputFile.is_open()) {
-        std::cerr << "Error: cannot open input.txt\n";
+        std::cerr << "Ошибка: не удалось открыть input.txt\n";
         return 1;
     }
+    // Читаем весь файл в строку через поток
     std::ostringstream ss;
     ss << inputFile.rdbuf();
     std::string source = ss.str();
@@ -73,14 +76,14 @@ int main() {
         Lexer lexer(source);
         tokens = lexer.tokenize();
     } catch (const LexerError& e) {
-        // A lexical error is reported as a syntax error
+        // Лексическая ошибка считается синтаксической по условию задания
         out << "Syntax error at line " << e.line
             << ", position " << e.col << "\n";
         return 0;
     }
 
     // =========================================================================
-    // Step 3: LL(1) syntax analysis
+    // Шаг 3: синтаксический анализ методом LL(1) (нисходящий разбор)
     // =========================================================================
     Parser     parser(grammar);
     ParseResult pr = parser.parse(tokens);
@@ -92,7 +95,7 @@ int main() {
     }
 
     // =========================================================================
-    // Step 4: Semantic analysis — duplicate field names
+    // Шаг 4: семантический анализ — проверяем уникальность имён полей структур
     // =========================================================================
     SemanticChecker checker;
     SemanticResult  sr = checker.check(tokens);
@@ -105,7 +108,7 @@ int main() {
     }
 
     // =========================================================================
-    // Step 5: All checks passed
+    // Шаг 5: все проверки пройдены успешно
     // =========================================================================
     out << "OK\n";
     return 0;

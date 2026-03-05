@@ -1,29 +1,29 @@
 /*
- * semantic.cpp — Implementation of the name-conflict checker.
+ * semantic.cpp — реализация семантического анализатора (проверка дублей имён).
  *
- * The checker runs a finite state machine over the token stream.
- * Since the parser already guarantees syntactic correctness, we can
- * make firm assumptions about which tokens will appear in which order.
+ * Анализатор реализует конечный автомат над потоком токенов.
+ * Так как парсер уже гарантировал синтаксическую корректность, можно
+ * делать жёсткие предположения о том, какие токены идут в каком порядке.
  *
- * State machine transitions are documented in semantic.h.
+ * Описание переходов автомата — в заголовочном файле semantic.h.
  */
 
 #include "semantic.h"
 
 // =============================================================================
-// Helper
+// Вспомогательный метод
 // =============================================================================
 
 /*
- * isTypeToken
- * -----------
- * Returns true for any token that can appear as the TYPE of a field
- * declaration according to the grammar:
+ * isTypeToken(tok)
+ * ----------------
+ * Возвращает true для любого токена, который может являться типом поля
+ * в объявлении структуры согласно грамматике:
  *
  *   TYPE → int | double | float | char | bool | string | <identifier>
  *
- * All six keyword types plus bare identifiers (user-defined struct types
- * such as  Point, MyVec, …) qualify.
+ * Все шесть ключевых слов-типов + голые идентификаторы (пользовательские
+ * типы, например Point, MyVec и т.д.) считаются типами.
  */
 bool SemanticChecker::isTypeToken(const Token& tok) {
     return tok.type == TokenType::KW_INT    ||
@@ -36,81 +36,81 @@ bool SemanticChecker::isTypeToken(const Token& tok) {
 }
 
 // =============================================================================
-// check()
+// Основной метод check()
 // =============================================================================
 
 /*
  * check(tokens)
  * -------------
- * Walk the token stream once, driven by the FSM described in semantic.h.
+ * Однократно проходим по потоку токенов, управляясь КА из semantic.h.
  *
- * Key data:
- *   currentFields — map from field name → (line, col) of its FIRST declaration
- *                   within the current struct.  Cleared at each new struct body.
+ * Ключевые данные:
+ *   currentFields — словарь: имя поля → (строка, столбец) первого объявления
+ *                   в текущей структуре. Очищается при начале новой структуры.
  *
- * Duplicate detection:
- *   When we record a field name in AFTER_TYPE → FIELD_NAMED:
- *     If name already in currentFields → conflict! Report the CURRENT token's
- *     position (second declaration).
- *     Else → insert name with current token's position.
+ * Обнаружение дублей:
+ *   В переходе AFTER_TYPE → FIELD_NAMED считываем имя поля.
+ *   Если имя уже есть в currentFields → конфликт! Сообщаем позицию ТЕКУЩЕГО токена
+ *   (второго объявления). Иначе добавляем имя в словарь.
  *
- * We return on the FIRST conflict found (per the spec).
+ * Возвращаем при ПЕРВОМ обнаруженном конфликте (по условию задания).
  */
 SemanticResult SemanticChecker::check(const std::vector<Token>& tokens) {
 
     // -------------------------------------------------------------------------
-    // FSM states
+    // Состояния конечного автомата
     // -------------------------------------------------------------------------
     enum class State {
-        INITIAL,       // between struct declarations
-        AFTER_STRUCT,  // just saw 'struct' keyword
-        STRUCT_NAMED,  // saw struct name (identifier), expecting '{'
-        IN_BODY,       // inside struct body, start of a new statement
-        AFTER_TYPE,    // just consumed the type token, next is field name
-        FIELD_NAMED,   // field name recorded, expecting ';' or '['
-        IN_ARRAY,      // inside [N], expecting the integer
-        ARRAY_INT,     // saw integer inside [...], expecting ']'
-        AFTER_CLOSE,   // saw closing '}', expecting ';'
+        INITIAL,       // между объявлениями структур
+        AFTER_STRUCT,  // только что встретили ключевое слово 'struct'
+        STRUCT_NAMED,  // прочитали имя структуры, ждём '{'
+        IN_BODY,       // внутри тела структуры, начало нового оператора
+        AFTER_TYPE,    // прочитали токен-тип, следующий — имя поля
+        FIELD_NAMED,   // имя поля записано, ждём ';' или '['
+        IN_ARRAY,      // внутри [N], ждём целое число — размер массива
+        ARRAY_INT,     // прочитали размер, ждём закрывающую ']'
+        AFTER_CLOSE,   // видели '}', ждём финальную ';' структуры
     };
 
     State state = State::INITIAL;
 
-    // Field table for the current struct: name → (line, col) of first decl.
+    // Таблица имён полей текущей структуры: имя → (строка, столбец) первого объявления
     std::map<std::string, std::pair<int,int>> currentFields;
 
     // -------------------------------------------------------------------------
-    // Token walk
+    // Проход по токенам
     // -------------------------------------------------------------------------
     for (const auto& tok : tokens) {
 
-        if (tok.type == TokenType::EOF_TOKEN) break;
+        if (tok.type == TokenType::EOF_TOKEN) break;  // достигли конца ввода
 
         switch (state) {
 
             // ----------------------------------------------------------------
-            // INITIAL: looking for the start of a struct declaration
+            // INITIAL: ищем начало объявления структуры
             // ----------------------------------------------------------------
             case State::INITIAL:
                 if (tok.type == TokenType::KW_STRUCT) {
+                    // Встретили 'struct' — начинаем отслеживать объявление
                     state = State::AFTER_STRUCT;
                 }
-                // Any other token between structs is ignored (should not
-                // occur after successful parsing, but be defensive).
+                // Любые другие токены между структурами игнорируем
+                // (после успешного разбора их там быть не должно, но перестрахуемся)
                 break;
 
             // ----------------------------------------------------------------
-            // AFTER_STRUCT: the token right after 'struct' must be the name
+            // AFTER_STRUCT: следующий токен — имя структуры
             // ----------------------------------------------------------------
             case State::AFTER_STRUCT:
                 if (tok.type == TokenType::IDENTIFIER) {
-                    // Begin a new struct scope: clear the field table
+                    // Начинаем новую область видимости: сбрасываем таблицу полей
                     currentFields.clear();
                     state = State::STRUCT_NAMED;
                 }
                 break;
 
             // ----------------------------------------------------------------
-            // STRUCT_NAMED: waiting for the opening brace '{'
+            // STRUCT_NAMED: ждём открывающую фигурную скобку '{'
             // ----------------------------------------------------------------
             case State::STRUCT_NAMED:
                 if (tok.type == TokenType::LBRACE) {
@@ -119,56 +119,56 @@ SemanticResult SemanticChecker::check(const std::vector<Token>& tokens) {
                 break;
 
             // ----------------------------------------------------------------
-            // IN_BODY: start of a statement inside the struct body.
-            //   • A type token begins a field declaration.
-            //   • '}' ends the struct body.
+            // IN_BODY: начало очередного оператора внутри тела структуры.
+            //   • Токен-тип → начало объявления поля
+            //   • '}' → конец тела структуры
             // ----------------------------------------------------------------
             case State::IN_BODY:
                 if (isTypeToken(tok)) {
-                    // The type of the next field: transition to AFTER_TYPE.
-                    // We don't record the type name itself — only the field
-                    // name (next identifier) matters for semantic checking.
+                    // Тип поля: переходим в состояние ожидания имени поля.
+                    // Сам тип для семантики не важен — нам нужно только имя.
                     state = State::AFTER_TYPE;
                 } else if (tok.type == TokenType::RBRACE) {
-                    // End of the struct body
+                    // Закончилось тело структуры
                     state = State::AFTER_CLOSE;
                 }
                 break;
 
             // ----------------------------------------------------------------
-            // AFTER_TYPE: the next identifier is the field name.
-            //   Check for duplicates HERE.
+            // AFTER_TYPE: следующий идентификатор — имя поля.
+            //   Здесь выполняем проверку на дубликаты.
             // ----------------------------------------------------------------
             case State::AFTER_TYPE:
                 if (tok.type == TokenType::IDENTIFIER) {
-                    // Duplicate check
+                    // Проверяем: не объявлено ли это имя раньше в той же структуре?
                     auto it = currentFields.find(tok.value);
                     if (it != currentFields.end()) {
-                        // This name was already declared in this struct →
-                        // report the SECOND occurrence (current token).
+                        // Имя уже встречалось — это конфликт.
+                        // Сообщаем позицию ВТОРОГО (текущего) объявления.
                         return SemanticResult::conflict(tok.value, tok.line, tok.col);
                     }
-                    // First occurrence: record it
+                    // Первый раз встречаем это имя — запоминаем его
                     currentFields[tok.value] = {tok.line, tok.col};
                     state = State::FIELD_NAMED;
                 }
                 break;
 
             // ----------------------------------------------------------------
-            // FIELD_NAMED: after the field name, expect ';' or '[' for array.
+            // FIELD_NAMED: после имени поля ожидаем ';' (конец объявления)
+            //              или '[' (начало объявления массива).
             // ----------------------------------------------------------------
             case State::FIELD_NAMED:
                 if (tok.type == TokenType::SEMICOLON) {
-                    // Simple field declaration ends
+                    // Простое объявление поля завершено — возвращаемся в начало тела
                     state = State::IN_BODY;
                 } else if (tok.type == TokenType::LBRACKET) {
-                    // Array declarator begins: expect integer next
+                    // Начинается задание размера массива [N]
                     state = State::IN_ARRAY;
                 }
                 break;
 
             // ----------------------------------------------------------------
-            // IN_ARRAY: inside [...], expecting the array size integer.
+            // IN_ARRAY: внутри скобок [...], ждём целое число — размер массива
             // ----------------------------------------------------------------
             case State::IN_ARRAY:
                 if (tok.type == TokenType::INTEGER) {
@@ -177,25 +177,27 @@ SemanticResult SemanticChecker::check(const std::vector<Token>& tokens) {
                 break;
 
             // ----------------------------------------------------------------
-            // ARRAY_INT: saw the array size, now expect the closing ']'.
+            // ARRAY_INT: прочитали размер массива, ждём закрывающую ']'
             // ----------------------------------------------------------------
             case State::ARRAY_INT:
                 if (tok.type == TokenType::RBRACKET) {
-                    // Back to FIELD_NAMED: still expecting ';'
+                    // Закрыли скобку — возвращаемся к ожиданию ';'
                     state = State::FIELD_NAMED;
                 }
                 break;
 
             // ----------------------------------------------------------------
-            // AFTER_CLOSE: saw '}', now expect the trailing ';'.
+            // AFTER_CLOSE: тело структуры закрыто, ждём финальную точку с запятой
             // ----------------------------------------------------------------
             case State::AFTER_CLOSE:
                 if (tok.type == TokenType::SEMICOLON) {
+                    // Объявление структуры полностью завершено
                     state = State::INITIAL;
                 }
                 break;
         }
     }
 
+    // Если дошли до конца без конфликтов — всё в порядке
     return SemanticResult::success();
 }

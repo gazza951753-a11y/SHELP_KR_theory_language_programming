@@ -1,13 +1,13 @@
 /*
- * lexer.cpp — Implementation of the struct-declaration tokenizer.
+ * lexer.cpp — реализация лексического анализатора для объявлений структур.
  *
- * Key design points
- * -----------------
- *  • Line/column tracking: col_ is incremented for every normal character;
- *    on '\n' we bump line_ and reset col_ to 1.
- *  • Comments: C++ single-line comments (//) are skipped entirely.
- *  • Keywords: identifiers that match a reserved word are reclassified.
- *  • Error: any unrecognised character throws LexerError.
+ * Основные особенности реализации:
+ *  • Отслеживание строки и столбца: col_ увеличивается на 1 для каждого символа;
+ *    при встрече '\n' увеличиваем line_ и сбрасываем col_ в 1.
+ *  • Комментарии: однострочные комментарии C++ (//) полностью пропускаются.
+ *  • Ключевые слова: идентификаторы, совпадающие с зарезервированными словами,
+ *    переклассифицируются в соответствующий тип токена.
+ *  • Ошибка: любой нераспознанный символ вызывает исключение LexerError.
  */
 
 #include "lexer.h"
@@ -16,12 +16,14 @@
 #include <unordered_map>
 
 // ---------------------------------------------------------------------------
-// Token helpers
+// Вспомогательные методы структуры Token
 // ---------------------------------------------------------------------------
 
+/*
+ * grammarSymbol() — переводит тип токена в строку, используемую в грамматике
+ * и таблице LL(1)-разбора. Нужен для связи лексера с парсером.
+ */
 std::string Token::grammarSymbol() const {
-    // Maps each token type to the terminal string used in grammar.txt and the
-    // LL(1) parse table.
     switch (type) {
         case TokenType::KW_STRUCT:    return "struct";
         case TokenType::KW_INT:       return "int";
@@ -39,9 +41,12 @@ std::string Token::grammarSymbol() const {
         case TokenType::RBRACKET:     return "]";
         case TokenType::EOF_TOKEN:    return "$";
     }
-    return "?";  // unreachable
+    return "?";  // сюда никогда не попадём, но компилятор требует return
 }
 
+/*
+ * typeName() — возвращает читаемое название типа токена для сообщений об ошибках.
+ */
 std::string Token::typeName() const {
     switch (type) {
         case TokenType::KW_STRUCT:    return "keyword 'struct'";
@@ -64,7 +69,7 @@ std::string Token::typeName() const {
 }
 
 // ---------------------------------------------------------------------------
-// Lexer constructor
+// Конструктор лексера
 // ---------------------------------------------------------------------------
 
 Lexer::Lexer(const std::string& source)
@@ -72,28 +77,43 @@ Lexer::Lexer(const std::string& source)
 {}
 
 // ---------------------------------------------------------------------------
-// Character helpers
+// Вспомогательные методы для работы с символами
 // ---------------------------------------------------------------------------
 
+/*
+ * atEnd() — возвращает true, если достигнут конец входного текста.
+ */
 bool Lexer::atEnd() const {
     return pos_ >= src_.size();
 }
 
+/*
+ * cur() — возвращает текущий символ (не двигает позицию).
+ * Если конец строки — возвращает '\0'.
+ */
 char Lexer::cur() const {
     if (atEnd()) return '\0';
     return src_[pos_];
 }
 
+/*
+ * peek(offset) — смотрит вперёд на offset символов без сдвига позиции.
+ * Используется, например, чтобы проверить "//" (два слэша подряд).
+ */
 char Lexer::peek(size_t offset) const {
     size_t idx = pos_ + offset;
     if (idx >= src_.size()) return '\0';
     return src_[idx];
 }
 
+/*
+ * advance() — читает текущий символ, продвигает позицию вперёд,
+ * обновляет счётчики строки и столбца, возвращает считанный символ.
+ */
 char Lexer::advance() {
     char c = src_[pos_++];
     if (c == '\n') {
-        // New line: reset column counter
+        // Встретили перевод строки — переходим на новую строку
         ++line_;
         col_ = 1;
     } else {
@@ -103,39 +123,46 @@ char Lexer::advance() {
 }
 
 // ---------------------------------------------------------------------------
-// Whitespace / comment skipping
+// Пропуск пробелов и комментариев
 // ---------------------------------------------------------------------------
 
+/*
+ * skipWhitespace() — пропускает все пробельные символы и однострочные
+ * комментарии вида "// ...". Вызывается перед каждым новым токеном.
+ */
 void Lexer::skipWhitespace() {
     while (!atEnd()) {
         char c = cur();
 
         if (std::isspace(static_cast<unsigned char>(c))) {
+            // Пробельный символ — просто пропускаем
             advance();
         } else if (c == '/' && peek() == '/') {
-            // C++ single-line comment: skip until end of line
+            // Однострочный комментарий C++ — пропускаем до конца строки
             while (!atEnd() && cur() != '\n') {
                 advance();
             }
         } else {
+            // Нашли значимый символ — выходим
             break;
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// Reading composite tokens
+// Чтение составных токенов
 // ---------------------------------------------------------------------------
 
 /*
- * readIdentifierOrKeyword
- * -----------------------
- * Precondition: cur() is a letter or underscore.
- * Reads [A-Za-z_][A-Za-z0-9_]* then checks whether the result is a
- * reserved keyword.  Returns an appropriately typed token.
+ * readIdentifierOrKeyword()
+ * --------------------------
+ * Предусловие: cur() — буква или символ подчёркивания.
+ * Читает последовательность [A-Za-z_][A-Za-z0-9_]*, затем проверяет,
+ * является ли считанная строка ключевым словом.
+ * Возвращает токен нужного типа (ключевое слово или идентификатор).
  */
 Token Lexer::readIdentifierOrKeyword() {
-    // Table of keywords recognised by this grammar
+    // Таблица всех ключевых слов нашей грамматики
     static const std::unordered_map<std::string, TokenType> keywords = {
         {"struct", TokenType::KW_STRUCT},
         {"int",    TokenType::KW_INT},
@@ -150,11 +177,12 @@ Token Lexer::readIdentifierOrKeyword() {
     int startCol  = col_;
     std::string lexeme;
 
+    // Читаем символы пока они буквенно-цифровые или '_'
     while (!atEnd() && (std::isalnum(static_cast<unsigned char>(cur())) || cur() == '_')) {
         lexeme += advance();
     }
 
-    // Check for keyword
+    // Проверяем — не ключевое ли это слово?
     auto it = keywords.find(lexeme);
     TokenType type = (it != keywords.end()) ? it->second : TokenType::IDENTIFIER;
 
@@ -162,10 +190,11 @@ Token Lexer::readIdentifierOrKeyword() {
 }
 
 /*
- * readInteger
- * -----------
- * Precondition: cur() is a digit.
- * Reads one or more decimal digits.
+ * readInteger()
+ * -------------
+ * Предусловие: cur() — цифра.
+ * Читает одну или более десятичных цифр подряд.
+ * Возвращает токен типа INTEGER.
  */
 Token Lexer::readInteger() {
     int startLine = line_;
@@ -180,20 +209,20 @@ Token Lexer::readInteger() {
 }
 
 // ---------------------------------------------------------------------------
-// Public interface: tokenize the entire source
+// Главный публичный метод: токенизация всего исходного текста
 // ---------------------------------------------------------------------------
 
 /*
  * tokenize()
  * ----------
- * Scans all characters, produces tokens in order.
- * Always appends an EOF_TOKEN as the last element.
+ * Сканирует весь исходный текст и возвращает вектор токенов.
+ * Последний элемент вектора всегда EOF_TOKEN ($).
  *
- * Algorithm:
- *   1. Skip whitespace / comments.
- *   2. Dispatch on the first character.
- *   3. Repeat until end of source.
- *   4. Append EOF sentinel.
+ * Алгоритм:
+ *   1. Пропускаем пробелы и комментарии.
+ *   2. Определяем тип следующего токена по первому символу.
+ *   3. Повторяем до конца входа.
+ *   4. Добавляем маркер конца потока EOF_TOKEN.
  */
 std::vector<Token> Lexer::tokenize() {
     std::vector<Token> tokens;
@@ -201,26 +230,26 @@ std::vector<Token> Lexer::tokenize() {
     while (true) {
         skipWhitespace();
 
-        if (atEnd()) break;
+        if (atEnd()) break;  // достигли конца исходного текста
 
         char c    = cur();
         int  line = line_;
         int  col  = col_;
 
-        // ---- Identifier / keyword ----
+        // ---- Идентификатор или ключевое слово ----
         if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') {
             tokens.push_back(readIdentifierOrKeyword());
             continue;
         }
 
-        // ---- Integer literal ----
+        // ---- Целочисленный литерал ----
         if (std::isdigit(static_cast<unsigned char>(c))) {
             tokens.push_back(readInteger());
             continue;
         }
 
-        // ---- Single-character punctuation ----
-        advance();   // consume the character
+        // ---- Односимвольные знаки пунктуации ----
+        advance();  // потребляем символ
         switch (c) {
             case '{':  tokens.emplace_back(TokenType::LBRACE,    "{", line, col); break;
             case '}':  tokens.emplace_back(TokenType::RBRACE,    "}", line, col); break;
@@ -228,13 +257,14 @@ std::vector<Token> Lexer::tokenize() {
             case '[':  tokens.emplace_back(TokenType::LBRACKET,  "[", line, col); break;
             case ']':  tokens.emplace_back(TokenType::RBRACKET,  "]", line, col); break;
             default:
+                // Неизвестный символ — это лексическая ошибка
                 throw LexerError(
-                    std::string("Unexpected character '") + c + "'",
+                    std::string("Неожиданный символ '") + c + "'",
                     line, col);
         }
     }
 
-    // Always terminate the token stream with an EOF sentinel
+    // В конце всегда добавляем маркер конца потока
     tokens.emplace_back(TokenType::EOF_TOKEN, "$", line_, col_);
     return tokens;
 }

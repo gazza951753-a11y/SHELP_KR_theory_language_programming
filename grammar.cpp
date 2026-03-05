@@ -1,8 +1,8 @@
 /*
- * grammar.cpp — Grammar loading, FIRST/FOLLOW/directing-set computation,
- *               LL(1) verification, and parse table construction.
+ * grammar.cpp — загрузка грамматики, вычисление множеств FIRST/FOLLOW/направляющих,
+ *               проверка свойства LL(1) и построение таблицы разбора.
  *
- * All algorithms are explained in detail in the function-level comments.
+ * Все алгоритмы разобраны подробно в комментариях к каждой функции.
  */
 
 #include "grammar.h"
@@ -13,17 +13,25 @@
 #include <stdexcept>
 
 // =============================================================================
-// String utilities
+// Вспомогательные строковые функции
 // =============================================================================
 
+/*
+ * trim(s) — убирает пробельные символы с обоих концов строки.
+ * Используется при парсинге файла грамматики.
+ */
 std::string Grammar::trim(const std::string& s) {
     size_t start = s.find_first_not_of(" \t\r\n");
-    if (start == std::string::npos) return "";
+    if (start == std::string::npos) return "";  // строка состоит только из пробелов
     size_t end = s.find_last_not_of(" \t\r\n");
     return s.substr(start, end - start + 1);
 }
 
-// Split s by the literal delimiter delim (not a regex, not a char class)
+/*
+ * splitBy(s, delim) — разбивает строку s по разделителю delim (не регулярное
+ * выражение, не набор символов, а буквальная подстрока).
+ * Используется для разбивки правой части по символу '|'.
+ */
 std::vector<std::string> Grammar::splitBy(const std::string& s,
                                           const std::string& delim) {
     std::vector<std::string> parts;
@@ -33,11 +41,14 @@ std::vector<std::string> Grammar::splitBy(const std::string& s,
         parts.push_back(s.substr(start, pos - start));
         start = pos + delim.size();
     }
-    parts.push_back(s.substr(start));
+    parts.push_back(s.substr(start));  // добавляем последний фрагмент
     return parts;
 }
 
-// Split s by any run of whitespace
+/*
+ * splitByWhitespace(s) — разбивает строку по любым пробельным символам.
+ * Используется для разбивки символов в правой части правила.
+ */
 std::vector<std::string> Grammar::splitByWhitespace(const std::string& s) {
     std::vector<std::string> result;
     std::istringstream iss(s);
@@ -49,36 +60,36 @@ std::vector<std::string> Grammar::splitByWhitespace(const std::string& s) {
 }
 
 // =============================================================================
-// Grammar file parser
+// Загрузка грамматики из файла
 // =============================================================================
 
 /*
- * parseRuleLine
- * -------------
- * Input: a single line like  "FIELDLIST -> FIELDDECL FIELDLIST | eps"
+ * parseRuleLine(line)
+ * -------------------
+ * Разбирает одну строку вида "FIELDLIST -> FIELDDECL FIELDLIST | eps".
  *
- * Steps:
- *   1. Find "->", split into LHS and RHS-string.
- *   2. Split RHS-string on "|" to get individual alternatives.
- *   3. For each alternative:
- *        - If trimmed text == "eps" → Rule with empty rhs (ε production)
- *        - Otherwise split by whitespace → list of symbols in rhs
- *      Create a Rule object and push it to rules_.
- *   4. Register LHS as a nonterminal.
+ * Шаги:
+ *   1. Ищем "->", делим на ЛЧС и строку правых частей.
+ *   2. Строку правых частей разбиваем по "|" на отдельные альтернативы.
+ *   3. Для каждой альтернативы:
+ *        - Если текст равен "eps" — создаём правило с пустой правой частью (ε)
+ *        - Иначе разбиваем по пробелам и получаем список символов правой части
+ *      Добавляем объект Rule в список rules_.
+ *   4. Регистрируем ЛЧС как нетерминал.
  */
 void Grammar::parseRuleLine(const std::string& line) {
     const std::string arrow = "->";
     auto arrowPos = line.find(arrow);
-    if (arrowPos == std::string::npos) return;  // no arrow → skip
+    if (arrowPos == std::string::npos) return;  // нет стрелки — пропускаем строку
 
     std::string lhs    = trim(line.substr(0, arrowPos));
     std::string rhsStr = trim(line.substr(arrowPos + arrow.size()));
 
-    if (lhs.empty() || rhsStr.empty()) return;
+    if (lhs.empty() || rhsStr.empty()) return;  // пустая строка — пропускаем
 
-    nonterminals_.insert(lhs);
+    nonterminals_.insert(lhs);  // ЛЧС всегда нетерминал
 
-    // Split alternatives
+    // Разбиваем альтернативы по вертикальной черте
     auto alts = splitBy(rhsStr, "|");
     for (auto& alt : alts) {
         alt = trim(alt);
@@ -86,7 +97,7 @@ void Grammar::parseRuleLine(const std::string& line) {
         rule.lhs = lhs;
 
         if (alt == "eps") {
-            // Epsilon production: rhs stays empty
+            // ε-правило: правая часть остаётся пустой
         } else {
             rule.rhs = splitByWhitespace(alt);
         }
@@ -94,6 +105,14 @@ void Grammar::parseRuleLine(const std::string& line) {
     }
 }
 
+/*
+ * loadFromFile(filename)
+ * ----------------------
+ * Загружает грамматику из текстового файла построчно.
+ * Пустые строки и строки-комментарии (#) игнорируются.
+ * После загрузки правил последовательно выполняет три прохода:
+ *   computeFirstSets(), computeFollowSets(), buildParseTable().
+ */
 bool Grammar::loadFromFile(const std::string& filename) {
     std::ifstream file(filename);
     if (!file.is_open()) return false;
@@ -102,23 +121,23 @@ bool Grammar::loadFromFile(const std::string& filename) {
     std::string line;
     while (std::getline(file, line)) {
         line = trim(line);
-        // Skip comment lines and blank lines
+        // Пропускаем пустые строки и комментарии
         if (line.empty() || line[0] == '#') continue;
 
         parseRuleLine(line);
 
-        // The start symbol is the LHS of the very first production rule
+        // Стартовый символ — ЛЧС самого первого правила
         if (firstRule && !rules_.empty()) {
             startSymbol_ = rules_.front().lhs;
             firstRule = false;
         }
     }
 
-    if (rules_.empty()) return false;
+    if (rules_.empty()) return false;  // грамматика пустая — ошибка
 
     // --------------------------------------------------------------------------
-    // Identify terminals: every RHS symbol that is NOT a nonterminal
-    // and is NOT "eps" is a terminal.
+    // Определяем терминалы: любой символ правой части, который не является
+    // нетерминалом и не является "eps", считается терминалом.
     // --------------------------------------------------------------------------
     for (const auto& rule : rules_) {
         for (const auto& sym : rule.rhs) {
@@ -127,11 +146,11 @@ bool Grammar::loadFromFile(const std::string& filename) {
             }
         }
     }
-    // The end-of-input sentinel $ is always a terminal
+    // Маркер конца ввода $ — всегда терминал
     terminals_.insert("$");
 
     // --------------------------------------------------------------------------
-    // Run the three computation passes
+    // Три прохода вычисления: FIRST → FOLLOW → таблица разбора
     // --------------------------------------------------------------------------
     computeFirstSets();
     computeFollowSets();
@@ -141,24 +160,24 @@ bool Grammar::loadFromFile(const std::string& filename) {
 }
 
 // =============================================================================
-// FIRST set computation
+// Вычисление множеств FIRST
 // =============================================================================
 
 /*
  * firstOfSequence([X1, X2, …, Xn])
  * ----------------------------------
- * Returns FIRST(X1 X2 … Xn).
+ * Возвращает FIRST(X1 X2 … Xn) — множество терминалов, которые могут
+ * стоять первыми в строках, выводимых из данной последовательности.
  *
- * Algorithm:
- *   Iterate through the symbols X1, X2, … from left to right.
- *   At each Xi:
- *     (a) Add FIRST(Xi) \ {eps} to the result.
- *     (b) If eps ∉ FIRST(Xi) → stop: Xi cannot be empty, so nothing
- *         to the right of Xi is reachable as the "first" symbol.
- *     (c) If eps ∈ FIRST(Xi) → continue to Xi+1 (Xi can be empty).
- *   After the loop: if every Xi could derive eps, add eps to result.
+ * Алгоритм (разбираем символы слева направо):
+ *   Для каждого Xi:
+ *     (а) Добавляем FIRST(Xi) \ {eps} в результат.
+ *     (б) Если eps ∉ FIRST(Xi) → стоп: этот Xi не может быть пустым,
+ *         значит за ним ничего не «просвечивает».
+ *     (в) Если eps ∈ FIRST(Xi) → продолжаем к Xi+1 (Xi может исчезнуть).
+ *   Если все Xi могут давать eps → добавляем eps в результат.
  *
- * The empty sequence always has eps in its FIRST set.
+ * Для пустой последовательности FIRST = {eps}.
  */
 std::set<std::string> Grammar::firstOfSequence(
         const std::vector<std::string>& seq) const {
@@ -166,35 +185,34 @@ std::set<std::string> Grammar::firstOfSequence(
     std::set<std::string> result;
 
     if (seq.empty()) {
+        // Пустая последовательность всегда даёт eps
         result.insert("eps");
         return result;
     }
 
     for (const auto& sym : seq) {
-        // Retrieve FIRST(sym).  If sym is unknown (shouldn't happen after
-        // loading), treat it as a terminal whose FIRST is {sym}.
+        // Берём FIRST(sym). Если символ не найден — считаем его терминалом
         std::set<std::string> firstSym;
         auto it = firstSets_.find(sym);
         if (it != firstSets_.end()) {
             firstSym = it->second;
         } else {
-            firstSym.insert(sym);
+            firstSym.insert(sym);  // терминал: FIRST = {сам символ}
         }
 
-        // Add FIRST(sym) \ {eps}
+        // Шаг (а): добавляем FIRST(sym) \ {eps}
         for (const auto& s : firstSym) {
             if (s != "eps") result.insert(s);
         }
 
-        // If sym cannot derive eps, the first symbol of the whole sequence
-        // must come from this position → stop.
+        // Шаг (б): если sym не может давать eps — прекращаем просмотр
         if (firstSym.find("eps") == firstSym.end()) {
             return result;
         }
-        // Otherwise sym can be empty → continue to the next symbol.
+        // Шаг (в): sym может быть пустым — идём дальше по последовательности
     }
 
-    // Every symbol in the sequence can derive eps → the whole sequence can too.
+    // Все символы последовательности могут давать eps — вся цепочка тоже
     result.insert("eps");
     return result;
 }
@@ -202,28 +220,28 @@ std::set<std::string> Grammar::firstOfSequence(
 /*
  * computeFirstSets()
  * ------------------
- * Iteratively compute FIRST(A) for every symbol (terminal & nonterminal).
+ * Итеративно вычисляет FIRST(A) для всех символов грамматики.
  *
- * Initialisation:
- *   • FIRST(terminal) = {terminal}   (a terminal can only derive itself)
- *   • FIRST(nonterminal) = {}        (filled in by the iteration below)
+ * Инициализация:
+ *   • FIRST(терминал) = {терминал}  (терминал выводит только сам себя)
+ *   • FIRST(нетерминал) = {}        (пополняется в процессе итерации)
  *
- * Iteration:
- *   For each rule  A → X1 X2 … Xn:
- *     Compute FIRST(X1 X2 … Xn) and add all its elements to FIRST(A).
- *   Repeat until no set changes (fixed point).
+ * Итерация:
+ *   Для каждого правила A → X1 X2 … Xn:
+ *     Вычисляем FIRST(X1 X2 … Xn) и добавляем всё в FIRST(A).
+ *   Повторяем до тех пор, пока хоть одно множество изменилось.
  *
- * Termination is guaranteed because we only add elements, never remove them,
- * and the alphabet is finite.
+ * Завершение гарантировано: мы только добавляем элементы (не убираем),
+ * а алфавит конечен — значит рано или поздно ничего не изменится.
  */
 void Grammar::computeFirstSets() {
-    // Initialise terminals: FIRST(t) = {t}
+    // Инициализация для терминалов: FIRST(t) = {t}
     for (const auto& t : terminals_) {
         firstSets_[t].insert(t);
     }
-    // Initialise nonterminals: FIRST(A) = {} (empty, filled by iteration)
+    // Инициализация для нетерминалов: пустое множество
     for (const auto& nt : nonterminals_) {
-        firstSets_[nt];  // inserts an empty set if not already present
+        firstSets_[nt];  // создаёт пустое множество, если его нет
     }
 
     bool changed = true;
@@ -233,50 +251,49 @@ void Grammar::computeFirstSets() {
             auto&  firstA   = firstSets_[rule.lhs];
             size_t oldSize  = firstA.size();
 
-            // Compute FIRST(rhs) and merge into FIRST(lhs)
+            // Вычисляем FIRST правой части и сливаем с FIRST левой части
             auto firstRhs = firstOfSequence(rule.rhs);
             firstA.insert(firstRhs.begin(), firstRhs.end());
 
-            if (firstA.size() != oldSize) changed = true;
+            if (firstA.size() != oldSize) changed = true;  // было добавлено что-то новое
         }
     }
 }
 
 // =============================================================================
-// FOLLOW set computation
+// Вычисление множеств FOLLOW
 // =============================================================================
 
 /*
  * computeFollowSets()
  * -------------------
- * Iteratively compute FOLLOW(A) for every nonterminal A.
+ * Итеративно вычисляет FOLLOW(A) для каждого нетерминала A.
  *
- * Initialisation:
- *   • FOLLOW(startSymbol) contains "$" (the end-of-input marker).
- *   • FOLLOW(A) = {} for all other nonterminals.
+ * Инициализация:
+ *   • FOLLOW(стартовый символ) = {"$"}
+ *   • FOLLOW(все остальные нетерминалы) = {}
  *
- * Iteration:
- *   For each rule  A → α B β   (B is a nonterminal, α and β are sequences):
+ * Итерация (для каждого правила A → α B β):
  *
- *   Rule 1: Add FIRST(β) \ {eps} to FOLLOW(B).
- *           (Any terminal that can start β can appear after B.)
+ *   Правило 1: Добавляем FIRST(β) \ {eps} в FOLLOW(B).
+ *              (Что может идти первым после β — то может следовать за B.)
  *
- *   Rule 2: If eps ∈ FIRST(β), add FOLLOW(A) to FOLLOW(B).
- *           (If β can be empty, whatever follows A can also follow B.)
+ *   Правило 2: Если eps ∈ FIRST(β), добавляем FOLLOW(A) в FOLLOW(B).
+ *              (Если β может быть пустой, то за B может идти то же, что за A.)
  *
- * Repeat until no set changes (fixed point).
+ * Повторяем до стабилизации (ни одно множество не изменилось).
  *
- * Example for rule  STRUCTDECL → struct <identifier> { FIELDLIST } ;
- *   β after FIELDLIST = ["}",";"]
- *   FIRST(["}", ";"]) = {"}"}  (no eps)
- *   → Add "}" to FOLLOW(FIELDLIST).
+ * Пример: для правила STRUCTDECL → struct <identifier> { FIELDLIST } ;
+ *   β после FIELDLIST = ["}", ";"]
+ *   FIRST(["}", ";"]) = {"}"}  (нет eps)
+ *   → добавляем "}" в FOLLOW(FIELDLIST)
  */
 void Grammar::computeFollowSets() {
-    // Initialise all FOLLOW sets to empty
+    // Инициализируем все FOLLOW-множества пустыми
     for (const auto& nt : nonterminals_) {
-        followSets_[nt];  // empty set
+        followSets_[nt];  // пустое множество
     }
-    // Start symbol: FOLLOW(S) ∋ $
+    // Стартовый символ: FOLLOW(S) ∋ $
     followSets_[startSymbol_].insert("$");
 
     bool changed = true;
@@ -284,27 +301,27 @@ void Grammar::computeFollowSets() {
         changed = false;
 
         for (const auto& rule : rules_) {
-            const std::string& A = rule.lhs;
+            const std::string& A = rule.lhs;  // левая часть правила
 
             for (size_t i = 0; i < rule.rhs.size(); ++i) {
                 const std::string& B = rule.rhs[i];
 
-                // Only nonterminals have FOLLOW sets
+                // FOLLOW есть только у нетерминалов
                 if (!isNonterminal(B)) continue;
 
-                // β = everything to the right of B in this rule
+                // β — всё, что стоит правее B в данном правиле
                 std::vector<std::string> beta(rule.rhs.begin() + i + 1,
                                               rule.rhs.end());
                 auto firstBeta = firstOfSequence(beta);
 
-                // Rule 1: Add FIRST(β) \ {eps} to FOLLOW(B)
+                // Правило 1: FIRST(β) \ {eps} → FOLLOW(B)
                 for (const auto& s : firstBeta) {
                     if (s != "eps") {
                         if (followSets_[B].insert(s).second) changed = true;
                     }
                 }
 
-                // Rule 2: If eps ∈ FIRST(β), add FOLLOW(A) to FOLLOW(B)
+                // Правило 2: если eps ∈ FIRST(β), то FOLLOW(A) → FOLLOW(B)
                 if (firstBeta.count("eps")) {
                     for (const auto& s : followSets_[A]) {
                         if (followSets_[B].insert(s).second) changed = true;
@@ -316,32 +333,30 @@ void Grammar::computeFollowSets() {
 }
 
 // =============================================================================
-// Parse table construction  (and LL(1) check)
+// Построение таблицы разбора и проверка LL(1)
 // =============================================================================
 
 /*
  * buildParseTable()
  * -----------------
- * For each rule  (index i)  A → α:
+ * Для каждого правила (с индексом i) A → α вычисляем НАПРАВЛЯЮЩЕЕ МНОЖЕСТВО:
  *
- *   Compute the DIRECTING (GUIDE) SET T(A → α):
+ *   T(A → α) = FIRST(α) \ {eps}
+ *            ∪ FOLLOW(A),  если eps ∈ FIRST(α)
  *
- *     T(A → α) = FIRST(α) \ {eps}
- *              ∪ FOLLOW(A)   if eps ∈ FIRST(α)
+ * Смысл:
+ *   • FIRST(α) \ {eps}: терминалы, с которых может начинаться α, говорят
+ *     парсеру "применяй это правило, когда видишь этот терминал в lookahead".
+ *   • Если α может давать пустую строку (eps ∈ FIRST(α)), то правило также
+ *     применяется, когда lookahead ∈ FOLLOW(A) — A "исчезает", и управление
+ *     переходит к следующему символу в родительском правиле.
  *
- *   Explanation:
- *     • FIRST(α) \ {eps}: any terminal that can appear first in α tells the
- *       parser "use this rule when you see this terminal".
- *     • If α can derive the empty string (eps ∈ FIRST(α)), then the rule
- *       can also be used when the lookahead is in FOLLOW(A) — the parser
- *       will expand A to ε and let the parent rule consume the current token.
+ * Заполнение таблицы:
+ *   Для каждого t ∈ T(A → α):
+ *     Если table[A][t] уже занят другим правилом → КОНФЛИКТ → не LL(1).
+ *     Иначе: table[A][t] = i.
  *
- *   Fill the parse table:
- *     For each t ∈ T(A → α):
- *       If table[A][t] is already set → CONFLICT → grammar is NOT LL(1).
- *       Otherwise set table[A][t] = i.
- *
- * Returns true iff no conflict was found (grammar is LL(1)).
+ * Возвращает true, если конфликтов нет (грамматика LL(1)).
  */
 bool Grammar::buildParseTable() {
     bool ok = true;
@@ -349,18 +364,18 @@ bool Grammar::buildParseTable() {
     for (size_t i = 0; i < rules_.size(); ++i) {
         const Rule& rule = rules_[i];
 
-        // Compute FIRST(rhs)
+        // Вычисляем FIRST правой части
         auto firstAlpha = firstOfSequence(rule.rhs);
 
-        // Build directing set T(A → α)
+        // Строим направляющее множество T(A → α)
         std::set<std::string> directing;
 
-        // Part 1: FIRST(α) \ {eps}
+        // Часть 1: FIRST(α) \ {eps}
         for (const auto& s : firstAlpha) {
             if (s != "eps") directing.insert(s);
         }
 
-        // Part 2: If eps ∈ FIRST(α), include FOLLOW(A)
+        // Часть 2: если eps ∈ FIRST(α), добавляем FOLLOW(A)
         if (firstAlpha.count("eps")) {
             auto it = followSets_.find(rule.lhs);
             if (it != followSets_.end()) {
@@ -368,17 +383,13 @@ bool Grammar::buildParseTable() {
             }
         }
 
-        // Fill parse table entries
+        // Заполняем таблицу разбора
         for (const auto& t : directing) {
             auto& cell = parseTable_[rule.lhs][t];
             if (cell != 0 && cell != (int)i) {
-                // Two rules map to the same (nonterminal, terminal) cell → conflict
+                // Уже занято другим правилом — конфликт
                 ok = false;
-                // Keep the first entry so we can still build a (potentially
-                // partial) table, but flag it.
             } else {
-                // 0 is our "unset" sentinel; rule 0 will overwrite it too —
-                // that's fine because we check for double-entry explicitly:
                 if (parseTable_[rule.lhs].find(t) == parseTable_[rule.lhs].end()) {
                     parseTable_[rule.lhs][t] = (int)i;
                 } else if (parseTable_[rule.lhs][t] != (int)i) {
@@ -390,11 +401,11 @@ bool Grammar::buildParseTable() {
         }
     }
 
-    // Fix: do a clean pass using a separate conflict-tracking structure
-    // (The above logic has a subtle issue with rule index 0 vs "unset".)
+    // Выполняем чистый второй проход с отдельной структурой отслеживания конфликтов
+    // (первый проход имеет тонкую проблему: индекс правила 0 совпадает с "не задано")
     parseTable_.clear();
     std::map<std::string, std::map<std::string, int>> table;
-    std::map<std::string, std::map<std::string, bool>> seen;
+    std::map<std::string, std::map<std::string, bool>> seen;  // отмечаем, было ли уже занято
     ok = true;
 
     for (size_t i = 0; i < rules_.size(); ++i) {
@@ -402,6 +413,7 @@ bool Grammar::buildParseTable() {
 
         auto firstAlpha = firstOfSequence(rule.rhs);
 
+        // Снова строим направляющее множество
         std::set<std::string> directing;
         for (const auto& s : firstAlpha) {
             if (s != "eps") directing.insert(s);
@@ -413,8 +425,10 @@ bool Grammar::buildParseTable() {
             }
         }
 
+        // Заполняем таблицу с явной проверкой конфликтов
         for (const auto& t : directing) {
             if (seen[rule.lhs][t]) {
+                // Эта ячейка уже занята — грамматика не LL(1)
                 ok = false;
             } else {
                 seen[rule.lhs][t] = true;

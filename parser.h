@@ -1,37 +1,37 @@
 /*
- * parser.h — LL(1) table-driven parser for struct declarations.
+ * parser.h — заголовочный файл LL(1)-парсера для объявлений структур.
  *
- * The parser uses the parse table built by the Grammar module and processes
- * the token stream produced by the Lexer.
+ * Парсер использует таблицу разбора, построенную модулем Grammar, и обрабатывает
+ * поток токенов от лексера методом нисходящего разбора без возвратов (LL(1)).
  *
- * Algorithm overview (table-driven LL(1))
- * ----------------------------------------
- * We maintain an explicit stack of grammar symbols.
- * Initially:  stack = [ "$",  startSymbol ]  ($ on the bottom)
+ * Алгоритм табличного LL(1)-разбора (подробно):
+ * -----------------------------------------------
+ * Используем явный стек грамматических символов.
+ * Начальное состояние: стек = [ "$", стартовый_символ ]  ($ — на дне)
  *
- * At each step we look at:
- *   • top  = top of the parse stack
- *   • tok  = current lookahead token
+ * На каждом шаге смотрим на:
+ *   • top  — вершина стека разбора
+ *   • tok  — текущий токен lookahead
  *
- * Case 1 — top is a TERMINAL:
- *   If top == tok.grammarSymbol()  →  match: pop top, advance input.
- *   Else  →  syntax error.
+ * Случай 1 — top является ТЕРМИНАЛОМ:
+ *   Если top == tok.grammarSymbol() → совпадение: снимаем top, берём следующий токен.
+ *   Иначе → синтаксическая ошибка.
  *
- * Case 2 — top is a NONTERMINAL:
- *   Look up table[top][tok.grammarSymbol()]:
- *     Found  →  pop top, push rhs symbols in REVERSE order (so the
- *               leftmost symbol ends up on top of the stack).
- *     Not found  →  syntax error.
+ * Случай 2 — top является НЕТЕРМИНАЛОМ:
+ *   Ищем table[top][tok.grammarSymbol()]:
+ *     Найдено  → снимаем top, добавляем символы правой части в ОБРАТНОМ порядке
+ *               (чтобы первый символ правой части оказался на вершине стека).
+ *     Не найдено → синтаксическая ошибка.
  *
- * Case 3 — top == "$" and tok == "$":
- *   Accept (successful parse).
+ * Случай 3 — top == "$" и tok == "$":
+ *   Успешное завершение разбора.
  *
- * Case 4 — top == "$" but tok != "$":
- *   The input has extra tokens after a complete parse → syntax error.
+ * Случай 4 — top == "$", но tok != "$":
+ *   В потоке остались лишние токены → синтаксическая ошибка.
  *
- * Result
- * ------
- * ParseResult holds either a success flag or a (line, col) error location.
+ * Результат
+ * ----------
+ * ParseResult содержит либо флаг успеха, либо позицию (строка, столбец) ошибки.
  */
 
 #pragma once
@@ -43,15 +43,15 @@
 #include <vector>
 
 // =============================================================================
-// ParseResult — outcome of one parse attempt
+// ParseResult — результат одной попытки разбора
 // =============================================================================
 struct ParseResult {
-    bool        ok;     // true = syntactically correct
-    int         line;   // error line   (meaningful only when ok == false)
-    int         col;    // error column (meaningful only when ok == false)
-    std::string msg;    // human-readable error description
+    bool        ok;     // true = синтаксически корректно
+    int         line;   // строка ошибки  (имеет смысл только при ok == false)
+    int         col;    // столбец ошибки (имеет смысл только при ok == false)
+    std::string msg;    // текстовое описание ошибки
 
-    // Factory helpers
+    // Вспомогательные фабричные методы
     static ParseResult success() {
         return {true, 0, 0, ""};
     }
@@ -61,27 +61,27 @@ struct ParseResult {
 };
 
 // =============================================================================
-// Parser
+// Parser — LL(1)-парсер
 // =============================================================================
 class Parser {
 public:
     /*
-     * Constructor.
-     * @param grammar  A fully loaded Grammar instance (must be LL(1)).
-     *                 The caller is responsible for checking isLL1() first.
+     * Конструктор.
+     * @param grammar  Загруженный объект Grammar (должен быть LL(1)).
+     *                 Вызывающий код обязан предварительно проверить isLL1().
      */
     explicit Parser(const Grammar& grammar);
 
     /*
      * parse(tokens)
      * -------------
-     * Run the LL(1) table-driven algorithm on the given token sequence.
-     * @param tokens  Output of Lexer::tokenize(); must end with EOF_TOKEN.
-     * @return ParseResult::success() on a valid input,
-     *         ParseResult::error()   on the first syntax error.
+     * Запускает алгоритм LL(1)-разбора на заданном потоке токенов.
+     * @param tokens  Результат Lexer::tokenize(); последний токен — EOF_TOKEN.
+     * @return ParseResult::success() при корректном вводе,
+     *         ParseResult::error()   при первой синтаксической ошибке.
      */
     ParseResult parse(const std::vector<Token>& tokens) const;
 
 private:
-    const Grammar& grammar_;
+    const Grammar& grammar_;  // ссылка на грамматику с таблицей разбора
 };
